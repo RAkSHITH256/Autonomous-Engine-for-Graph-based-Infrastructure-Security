@@ -4,8 +4,24 @@ from datetime import datetime
 
 class RemediationExecutor:
 
-    def __init__(self, dry_run: bool = True):
+    def __init__(
+        self,
+        dry_run: bool = True,
+        simulate_success: bool = False,
+    ):
+        """
+        dry_run:
+            No remediation state is changed.
+
+        simulate_success:
+            Simulates a successful remediation without
+            modifying the real system.
+
+        Both options are safe for development/testing.
+        """
+
         self.dry_run = dry_run
+        self.simulate_success = simulate_success
 
     def execute(
         self,
@@ -43,8 +59,14 @@ class RemediationExecutor:
             "P3",
         )
 
-        # Safety: require approval
+        timestamp = datetime.utcnow().isoformat()
+
+        # ========================================================
+        # 1. Approval check
+        # ========================================================
+
         if not approved:
+
             return {
                 "status": "PENDING_APPROVAL",
                 "executed": False,
@@ -56,50 +78,96 @@ class RemediationExecutor:
                     "Remediation requires explicit approval "
                     "before execution."
                 ),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": timestamp,
             }
 
-        # Safe testing mode
-        if self.dry_run:
-            return {
-                "status": "DRY_RUN",
-                "executed": False,
-                "dry_run": True,
-                "vulnerability": vulnerability,
-                "action": action,
-                "package": package,
-                "installed_version": installed_version,
-                "fixed_version": fixed_version,
-                "priority": priority,
-                "message": (
-                    f"Would upgrade {package} from "
-                    f"{installed_version} to "
-                    f"{fixed_version}."
-                ),
-                "timestamp": datetime.utcnow().isoformat(),
-            }
+        # ========================================================
+        # 2. Validate package upgrade
+        # ========================================================
 
-        # Validate package upgrade
         if action == "UPGRADE_PACKAGE":
 
             if not fixed_version:
+
                 return {
                     "status": "FAILED",
                     "executed": False,
-                    "dry_run": False,
+                    "dry_run": self.dry_run,
                     "vulnerability": vulnerability,
                     "action": action,
+                    "package": package,
+                    "installed_version": installed_version,
+                    "fixed_version": fixed_version,
+                    "priority": priority,
                     "message": (
                         "Cannot execute package upgrade because "
                         "no fixed version was provided."
                     ),
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": timestamp,
                 }
+
+            # ====================================================
+            # 3. Simulation-success mode
+            # ====================================================
+
+            if self.simulate_success:
+
+                return {
+                    "status": "EXECUTED",
+                    "executed": True,
+                    "dry_run": True,
+                    "simulated": True,
+                    "vulnerability": vulnerability,
+                    "action": action,
+                    "package": package,
+                    "previous_version": installed_version,
+                    "installed_version": installed_version,
+                    "fixed_version": fixed_version,
+                    "current_version": fixed_version,
+                    "priority": priority,
+                    "message": (
+                        f"Simulated successful upgrade of "
+                        f"{package} from "
+                        f"{installed_version} to "
+                        f"{fixed_version}."
+                    ),
+                    "timestamp": timestamp,
+                }
+
+            # ====================================================
+            # 4. Normal dry-run
+            # ====================================================
+
+            if self.dry_run:
+
+                return {
+                    "status": "DRY_RUN",
+                    "executed": False,
+                    "dry_run": True,
+                    "simulated": False,
+                    "vulnerability": vulnerability,
+                    "action": action,
+                    "package": package,
+                    "installed_version": installed_version,
+                    "fixed_version": fixed_version,
+                    "priority": priority,
+                    "message": (
+                        f"Would upgrade {package} from "
+                        f"{installed_version} to "
+                        f"{fixed_version}."
+                    ),
+                    "timestamp": timestamp,
+                }
+
+            # ====================================================
+            # 5. Real execution intentionally disabled
+            # ====================================================
 
             return {
                 "status": "READY_FOR_EXECUTION",
                 "executed": False,
                 "dry_run": False,
+                "simulated": False,
                 "vulnerability": vulnerability,
                 "action": action,
                 "package": package,
@@ -108,21 +176,27 @@ class RemediationExecutor:
                 "priority": priority,
                 "message": (
                     f"Validated upgrade of {package} from "
-                    f"{installed_version} to {fixed_version}. "
-                    "Real execution is disabled."
+                    f"{installed_version} to "
+                    f"{fixed_version}. "
+                    "Real package execution is disabled."
                 ),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": timestamp,
             }
+
+        # ========================================================
+        # 6. Unsupported remediation action
+        # ========================================================
 
         return {
             "status": "UNSUPPORTED_ACTION",
             "executed": False,
             "dry_run": self.dry_run,
+            "simulated": False,
             "vulnerability": vulnerability,
             "action": action,
             "message": (
                 f"Remediation action '{action}' "
                 "is not supported."
             ),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": timestamp,
         }

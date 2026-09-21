@@ -9,13 +9,18 @@ from backend.reassessment.reassessment_engine import ReassessmentEngine
 
 class SecurityLoop:
 
-    def __init__(self, dry_run: bool = True):
+    def __init__(
+        self,
+        dry_run: bool = True,
+        simulate_success: bool = False,
+    ):
         self.decision_engine = DecisionEngine()
 
         self.remediation_engine = RemediationEngine()
 
         self.executor = RemediationExecutor(
-            dry_run=dry_run
+            dry_run=dry_run,
+            simulate_success=simulate_success,
         )
 
         self.verification_engine = VerificationEngine()
@@ -29,15 +34,15 @@ class SecurityLoop:
         approved: bool = False,
     ) -> dict[str, Any]:
 
-        # ---------------------------------------------------------
+        # =========================================================
         # 1. Risk → Decision
-        # ---------------------------------------------------------
+        # =========================================================
 
         decision = self.decision_engine.decide(risk)
 
-        # ---------------------------------------------------------
+        # =========================================================
         # 2. Decision → Remediation
-        # ---------------------------------------------------------
+        # =========================================================
 
         remediation = (
             self.remediation_engine.generate_recommendation(
@@ -46,27 +51,27 @@ class SecurityLoop:
             )
         )
 
-        # ---------------------------------------------------------
+        # =========================================================
         # 3. Remediation → Execution
-        # ---------------------------------------------------------
+        # =========================================================
 
         execution = self.executor.execute(
             remediation=remediation,
             approved=approved,
         )
 
-        # ---------------------------------------------------------
+        # =========================================================
         # 4. Execution → Verification
-        # ---------------------------------------------------------
+        # =========================================================
 
         verification = self.verification_engine.verify(
             vulnerability=vulnerability,
             remediation=execution,
         )
 
-        # ---------------------------------------------------------
+        # =========================================================
         # 5. Verification → Reassessment
-        # ---------------------------------------------------------
+        # =========================================================
 
         reassessment = self.reassessment_engine.reassess(
             vulnerability=vulnerability,
@@ -74,15 +79,31 @@ class SecurityLoop:
             current_risk=risk,
         )
 
-        # ---------------------------------------------------------
-        # 6. Return complete lifecycle
-        # ---------------------------------------------------------
+        # =========================================================
+        # 6. Complete Security Lifecycle
+        # =========================================================
 
         return {
+            "status": "success",
+
+            "vulnerability": vulnerability,
+
+            "risk": {
+                "score": risk.score,
+                "level": risk.level,
+                "factors": risk.factors,
+                "explanation": risk.explanation,
+            },
+
             "decision": decision,
+
             "remediation": remediation,
+
             "execution": execution,
+
             "verification": verification,
+
             "reassessment": reassessment,
+
             "loop_status": reassessment["status"],
         }
