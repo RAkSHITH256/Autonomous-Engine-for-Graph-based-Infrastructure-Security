@@ -5,15 +5,6 @@ from datetime import datetime
 class RemediationExecutor:
 
     def __init__(self, dry_run: bool = True):
-        """
-        Initialize remediation executor.
-
-        dry_run=True:
-            No real system changes are performed.
-
-        dry_run=False:
-            Execution is permitted for supported remediation actions.
-        """
         self.dry_run = dry_run
 
     def execute(
@@ -52,12 +43,8 @@ class RemediationExecutor:
             "P3",
         )
 
-        # ---------------------------------------------------------
-        # Safety check
-        # ---------------------------------------------------------
-
+        # Safety: require approval
         if not approved:
-
             return {
                 "status": "PENDING_APPROVAL",
                 "executed": False,
@@ -72,12 +59,8 @@ class RemediationExecutor:
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-        # ---------------------------------------------------------
-        # Dry-run mode
-        # ---------------------------------------------------------
-
+        # Safe testing mode
         if self.dry_run:
-
             return {
                 "status": "DRY_RUN",
                 "executed": False,
@@ -96,14 +79,10 @@ class RemediationExecutor:
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-        # ---------------------------------------------------------
-        # Supported remediation
-        # ---------------------------------------------------------
-
+        # Validate package upgrade
         if action == "UPGRADE_PACKAGE":
 
             if not fixed_version:
-
                 return {
                     "status": "FAILED",
                     "executed": False,
@@ -116,10 +95,6 @@ class RemediationExecutor:
                     ),
                     "timestamp": datetime.utcnow().isoformat(),
                 }
-
-            # -----------------------------------------------------
-            # REAL EXECUTION IS INTENTIONALLY NOT IMPLEMENTED YET
-            # -----------------------------------------------------
 
             return {
                 "status": "READY_FOR_EXECUTION",
@@ -134,14 +109,10 @@ class RemediationExecutor:
                 "message": (
                     f"Validated upgrade of {package} from "
                     f"{installed_version} to {fixed_version}. "
-                    "Real execution is disabled in this version."
+                    "Real execution is disabled."
                 ),
                 "timestamp": datetime.utcnow().isoformat(),
             }
-
-        # ---------------------------------------------------------
-        # Unsupported action
-        # ---------------------------------------------------------
 
         return {
             "status": "UNSUPPORTED_ACTION",

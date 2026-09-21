@@ -1,0 +1,397 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: #0b0f14;
+  color: #e6edf3;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 28px 48px;
+  border-bottom: 1px solid #202832;
+  background: #0d1218;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 30px;
+  letter-spacing: 2px;
+}
+
+.header p {
+  margin: 6px 0 0;
+  color: #8b98a5;
+}
+
+.status {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  background: #39d98a;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+
+main {
+  padding: 35px 48px;
+  max-width: 1500px;
+  margin: auto;
+}
+
+.overview {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.card,
+.panel {
+  background: #111820;
+  border: 1px solid #202a34;
+  border-radius: 12px;
+}
+
+.card {
+  padding: 24px;
+}
+
+.label {
+  display: block;
+  color: #71808e;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.3px;
+  margin-bottom: 10px;
+}
+
+.risk-score {
+  font-size: 54px;
+  font-weight: 800;
+}
+
+.risk-level {
+  display: inline-block;
+  margin-top: 8px;
+  color: #ff6673;
+  font-weight: 800;
+}
+
+.metric {
+  font-size: 30px;
+  font-weight: 750;
+  margin-top: 15px;
+}
+
+.muted {
+  color: #71808e;
+  font-size: 13px;
+}
+
+.panel {
+  padding: 26px;
+  margin-bottom: 24px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 25px;
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.panel-header p {
+  margin: 6px 0 0;
+  color: #71808e;
+}
+
+.badge {
+  padding: 7px 12px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.critical {
+  background: #351a20;
+  color: #ff6673;
+}
+
+.priority {
+  background: #302518;
+  color: #ffbf69;
+}
+
+.attack-path {
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  padding: 20px 0;
+}
+
+.path-item {
+  display: flex;
+  align-items: center;
+}
+
+.node {
+  min-width: 145px;
+  padding: 16px;
+  border: 1px solid #293542;
+  border-radius: 9px;
+  background: #151e27;
+}
+
+.node strong {
+  display: block;
+  margin-top: 7px;
+}
+
+.node-type {
+  font-size: 10px;
+  color: #71808e;
+  font-weight: 800;
+}
+
+.critical-node {
+  border-color: #a33a47;
+}
+
+.criticality {
+  display: block;
+  margin-top: 7px;
+  font-size: 10px;
+  color: #ff6673;
+}
+
+.arrow {
+  padding: 0 14px;
+  font-size: 22px;
+  color: #566574;
+}
+
+.finding-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 20px;
+}
+
+.finding-grid strong {
+  font-size: 15px;
+}
+
+.remediation-box {
+  padding: 20px;
+  border: 1px solid #293542;
+  border-radius: 9px;
+  background: #151e27;
+}
+
+.action {
+  font-weight: 800;
+  margin-bottom: 10px;
+}
+
+.remediation-box p {
+  margin: 0;
+  color: #aab5bf;
+}
+
+.error {
+  max-width: 700px;
+  margin: 100px auto;
+  padding: 30px;
+  border: 1px solid #4a252b;
+  border-radius: 12px;
+  background: #1b1215;
+}
+
+code {
+  color: #ffbf69;
+}
+
+.loading {
+  display: grid;
+  place-items: center;
+  height: 100vh;
+}
+
+footer {
+  text-align: center;
+  padding: 30px;
+  color: #566574;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .header {
+    padding: 25px;
+  }
+
+  main {
+    padding: 25px;
+  }
+
+  .overview {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .finding-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .overview {
+    grid-template-columns: 1fr;
+  }
+
+  .finding-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* =========================================================
+   INTERACTIVE ATTACK GRAPH
+   ========================================================= */
+
+.graph-panel {
+  min-height: 560px;
+}
+
+.graph-container {
+  height: 450px;
+  width: 100%;
+  border: 1px solid #202a34;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0b0f14;
+}
+
+.graph-container .react-flow {
+  background: #0b0f14;
+}
+
+.graph-node {
+  width: 180px;
+  padding: 17px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #151e27;
+  color: #e6edf3;
+  text-align: center;
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.25);
+  transition: all 0.2s ease;
+}
+
+.graph-node:hover {
+  border-color: #64748b;
+  transform: translateY(-2px);
+}
+
+.graph-critical {
+  border-color: #ff4d5e;
+  box-shadow:
+    0 0 18px rgba(255, 77, 94, 0.25);
+}
+
+.graph-node-type {
+  color: #71808e;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.graph-node-name {
+  margin-top: 7px;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.graph-node-criticality {
+  margin-top: 7px;
+  color: #ff4d5e;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.selected-node-panel {
+  border-color: #334155;
+}
+
+.selected-node-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.close-button {
+  border: none;
+  background: transparent;
+  color: #71808e;
+  font-size: 28px;
+  cursor: pointer;
+}
+
+.close-button:hover {
+  color: #ffffff;
+}
+
+.danger-text {
+  color: #ff4d5e;
+}
+
+
+/* React Flow controls */
+
+.graph-container .react-flow__controls {
+  box-shadow: none;
+}
+
+.graph-container .react-flow__controls-button {
+  background: #151e27;
+  border-color: #293542;
+  color: #e6edf3;
+}
+
+.graph-container .react-flow__controls-button:hover {
+  background: #202a34;
+}
+
+.graph-container .react-flow__minimap {
+  background: #111820;
+  border: 1px solid #293542;
+}
+
+@media (max-width: 900px) {
+
+  .selected-node-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .graph-container {
+    height: 400px;
+  }
+
+}
