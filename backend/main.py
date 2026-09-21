@@ -369,3 +369,128 @@ def dashboard():
     finally:
 
         client.close()
+
+# ============================================================
+# REMEDIATION EXECUTION API
+# ============================================================
+
+from fastapi import Query
+
+
+@app.post("/remediate")
+def remediate(
+    vulnerability_id: str = Query(...),
+    approved: bool = Query(False),
+):
+    """
+    Execute remediation for a specific vulnerability.
+
+    Safety:
+    - Explicit approval is required.
+    - Real execution remains disabled by default.
+    - Verification runs after execution.
+    """
+
+    client = Neo4jClient(
+        "bolt://localhost:7687",
+        "neo4j",
+        "aegisdev",
+    )
+
+    try:
+        assessments = assess_attack_path_risks(client)
+
+        if not assessments:
+            return {
+                "status": "no_risk_assessment",
+                "message": "No vulnerable attack path was found.",
+            }
+
+        selected = None
+
+        for assessment in assessments:
+            vulnerability = assessment["vulnerability"]
+
+            if vulnerability.get("identifier") == vulnerability_id:
+                selected = assessment
+                break
+
+        if selected is None:
+            return {
+                "status": "not_found",
+                "message": (
+                    f"Vulnerability {vulnerability_id} "
+                    "was not found."
+                ),
+            }
+
+        vulnerability = selected["vulnerability"]
+        risk = selected["risk"]
+
+        decision_engine = DecisionEngine()
+        remediation_engine = RemediationEngine()
+
+        executor = RemediationExecutor(
+            dry_run=True
+        )
+
+        verification_engine = VerificationEngine()
+
+        # --------------------------------------------------------
+        # Risk → Decision
+        # --------------------------------------------------------
+
+        decision = decision_engine.decide(risk)
+
+        # --------------------------------------------------------
+        # Decision → Remediation
+        # --------------------------------------------------------
+
+        remediation = (
+            remediation_engine.generate_recommendation(
+                vulnerability=vulnerability,
+                decision=decision,
+            )
+        )
+
+        # --------------------------------------------------------
+        # Remediation → Executor
+        # --------------------------------------------------------
+
+        execution = executor.execute(
+            remediation=remediation,
+            approved=approved,
+        )
+
+        # --------------------------------------------------------
+        # Executor → Verification
+        # --------------------------------------------------------
+
+        verification = verification_engine.verify(
+            vulnerability=vulnerability,
+            remediation=execution,
+        )
+
+        return {
+            "status": "success",
+
+            "vulnerability": vulnerability,
+
+            "risk": {
+                "score": risk.score,
+                "level": risk.level,
+                "factors": risk.factors,
+                "explanation": risk.explanation,
+            },
+
+            "decision": decision,
+
+            "remediation": remediation,
+
+            "execution": execution,
+
+            "verification": verification,
+        }
+
+    finally:
+        client.close()
