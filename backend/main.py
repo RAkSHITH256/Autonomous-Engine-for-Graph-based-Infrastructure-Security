@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.graph.neo4j_client import Neo4jClient
@@ -7,6 +7,8 @@ from backend.decision.decision_engine import DecisionEngine
 from backend.remediation.remediation_engine import RemediationEngine
 from backend.remediation.remediation_executor import RemediationExecutor
 from backend.remediation.verification_engine import VerificationEngine
+from backend.orchestration.security_loop import SecurityLoop
+from backend.reassessment.reassessment_engine import ReassessmentEngine
 
 
 app = FastAPI(
@@ -71,6 +73,8 @@ def assess_risk():
     Execution
        ↓
     Verification
+       ↓
+    Reassessment
     """
 
     client = Neo4jClient(
@@ -100,13 +104,13 @@ def assess_risk():
         decision_engine = DecisionEngine()
         remediation_engine = RemediationEngine()
 
-        # Safe mode:
-        # No real infrastructure changes are performed.
+        # Safe mode
         executor = RemediationExecutor(
             dry_run=True
         )
 
         verification_engine = VerificationEngine()
+        reassessment_engine = ReassessmentEngine()
 
         vulnerability_results = []
 
@@ -117,21 +121,13 @@ def assess_risk():
         for assessment in assessments:
 
             vulnerability = assessment["vulnerability"]
-
             risk = assessment["risk"]
-
             attack_path = assessment["attack_path"]
 
-            # ----------------------------------------------------
             # Risk → Decision
-            # ----------------------------------------------------
-
             decision = decision_engine.decide(risk)
 
-            # ----------------------------------------------------
-            # Decision → Remediation Recommendation
-            # ----------------------------------------------------
-
+            # Decision → Remediation
             remediation = (
                 remediation_engine.generate_recommendation(
                     vulnerability=vulnerability,
@@ -139,29 +135,24 @@ def assess_risk():
                 )
             )
 
-            # ----------------------------------------------------
             # Remediation → Executor
-            #
-            # We intentionally require approval.
-            # ----------------------------------------------------
-
             execution = executor.execute(
                 remediation=remediation,
                 approved=False,
             )
 
-            # ----------------------------------------------------
             # Executor → Verification
-            # ----------------------------------------------------
-
             verification = verification_engine.verify(
                 vulnerability=vulnerability,
                 remediation=execution,
             )
 
-            # ----------------------------------------------------
-            # Store complete result
-            # ----------------------------------------------------
+            # Verification → Reassessment
+            reassessment = reassessment_engine.reassess(
+                vulnerability=vulnerability,
+                verification=verification,
+                current_risk=risk,
+            )
 
             vulnerability_results.append({
 
@@ -181,6 +172,8 @@ def assess_risk():
                 "execution": execution,
 
                 "verification": verification,
+
+                "reassessment": reassessment,
 
                 "attack_path": attack_path,
             })
@@ -263,7 +256,6 @@ def dashboard():
         # --------------------------------------------------------
 
         decision_engine = DecisionEngine()
-
         remediation_engine = RemediationEngine()
 
         findings = []
@@ -275,27 +267,19 @@ def dashboard():
         for assessment in assessments:
 
             vulnerability = assessment["vulnerability"]
-
             risk = assessment["risk"]
-
             attack_path = assessment["attack_path"]
 
             # Decision
-
-            decision = decision_engine.decide(
-                risk
-            )
+            decision = decision_engine.decide(risk)
 
             # Remediation
-
             remediation = (
                 remediation_engine.generate_recommendation(
                     vulnerability=vulnerability,
                     decision=decision,
                 )
             )
-
-            # Dashboard finding
 
             findings.append({
 
@@ -325,7 +309,6 @@ def dashboard():
 
                 "remediation":
                     remediation["recommendation"],
-
             })
 
         # --------------------------------------------------------
@@ -355,7 +338,6 @@ def dashboard():
 
                 "finding_count":
                     len(findings),
-
             },
 
             "attack_path":
@@ -363,19 +345,16 @@ def dashboard():
 
             "findings":
                 findings,
-
         }
 
     finally:
 
         client.close()
 
+
 # ============================================================
 # REMEDIATION EXECUTION API
 # ============================================================
-
-from fastapi import Query
-
 
 @app.post("/remediate")
 def remediate(
@@ -383,12 +362,23 @@ def remediate(
     approved: bool = Query(False),
 ):
     """
-    Execute remediation for a specific vulnerability.
+    Run the controlled AEGIS remediation loop.
 
-    Safety:
-    - Explicit approval is required.
-    - Real execution remains disabled by default.
-    - Verification runs after execution.
+    Flow:
+
+    Risk
+      ↓
+    Decision
+      ↓
+    Remediation
+      ↓
+    Approval
+      ↓
+    Execution
+      ↓
+    Verification
+      ↓
+    Reassessment
     """
 
     client = Neo4jClient(
@@ -398,6 +388,11 @@ def remediate(
     )
 
     try:
+
+        # --------------------------------------------------------
+        # 1. Find current assessments
+        # --------------------------------------------------------
+
         assessments = assess_attack_path_risks(client)
 
         if not assessments:
@@ -406,9 +401,14 @@ def remediate(
                 "message": "No vulnerable attack path was found.",
             }
 
+        # --------------------------------------------------------
+        # 2. Find requested vulnerability
+        # --------------------------------------------------------
+
         selected = None
 
         for assessment in assessments:
+
             vulnerability = assessment["vulnerability"]
 
             if vulnerability.get("identifier") == vulnerability_id:
@@ -416,6 +416,7 @@ def remediate(
                 break
 
         if selected is None:
+
             return {
                 "status": "not_found",
                 "message": (
@@ -427,49 +428,23 @@ def remediate(
         vulnerability = selected["vulnerability"]
         risk = selected["risk"]
 
-        decision_engine = DecisionEngine()
-        remediation_engine = RemediationEngine()
+        # --------------------------------------------------------
+        # 3. Start Security Loop
+        # --------------------------------------------------------
 
-        executor = RemediationExecutor(
+        security_loop = SecurityLoop(
             dry_run=True
         )
 
-        verification_engine = VerificationEngine()
-
-        # --------------------------------------------------------
-        # Risk → Decision
-        # --------------------------------------------------------
-
-        decision = decision_engine.decide(risk)
-
-        # --------------------------------------------------------
-        # Decision → Remediation
-        # --------------------------------------------------------
-
-        remediation = (
-            remediation_engine.generate_recommendation(
-                vulnerability=vulnerability,
-                decision=decision,
-            )
-        )
-
-        # --------------------------------------------------------
-        # Remediation → Executor
-        # --------------------------------------------------------
-
-        execution = executor.execute(
-            remediation=remediation,
+        result = security_loop.process(
+            vulnerability=vulnerability,
+            risk=risk,
             approved=approved,
         )
 
         # --------------------------------------------------------
-        # Executor → Verification
+        # 4. Return complete lifecycle result
         # --------------------------------------------------------
-
-        verification = verification_engine.verify(
-            vulnerability=vulnerability,
-            remediation=execution,
-        )
 
         return {
             "status": "success",
@@ -483,14 +458,19 @@ def remediate(
                 "explanation": risk.explanation,
             },
 
-            "decision": decision,
+            "decision": result["decision"],
 
-            "remediation": remediation,
+            "remediation": result["remediation"],
 
-            "execution": execution,
+            "execution": result["execution"],
 
-            "verification": verification,
+            "verification": result["verification"],
+
+            "reassessment": result["reassessment"],
+
+            "loop_status": result["loop_status"],
         }
 
     finally:
+
         client.close()

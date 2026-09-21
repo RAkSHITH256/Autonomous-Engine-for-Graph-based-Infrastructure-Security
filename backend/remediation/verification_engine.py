@@ -19,7 +19,7 @@ class VerificationEngine:
             "UNKNOWN",
         )
 
-        current_version = vulnerability.get(
+        installed_version = vulnerability.get(
             "installed_version",
             "UNKNOWN",
         )
@@ -35,7 +35,7 @@ class VerificationEngine:
         )
 
         # ---------------------------------------------------------
-        # Remediation was not executed
+        # 1. Remediation was not executed
         # ---------------------------------------------------------
 
         if remediation_status in {
@@ -49,7 +49,7 @@ class VerificationEngine:
                 "verified": False,
                 "vulnerability": identifier,
                 "package": package,
-                "current_version": current_version,
+                "current_version": installed_version,
                 "fixed_version": fixed_version,
                 "reason": (
                     "Remediation has not been executed. "
@@ -59,7 +59,7 @@ class VerificationEngine:
             }
 
         # ---------------------------------------------------------
-        # Failed remediation
+        # 2. Failed remediation
         # ---------------------------------------------------------
 
         if remediation_status == "FAILED":
@@ -69,7 +69,7 @@ class VerificationEngine:
                 "verified": False,
                 "vulnerability": identifier,
                 "package": package,
-                "current_version": current_version,
+                "current_version": installed_version,
                 "fixed_version": fixed_version,
                 "reason": (
                     "Remediation execution failed. "
@@ -78,10 +78,16 @@ class VerificationEngine:
             }
 
         # ---------------------------------------------------------
-        # Verify successful upgrade
+        # 3. Successful execution
         # ---------------------------------------------------------
 
         if remediation_status == "EXECUTED":
+
+            # Executor should report the resulting version.
+            current_version = remediation.get(
+                "current_version",
+                fixed_version,
+            )
 
             if (
                 fixed_version
@@ -116,7 +122,7 @@ class VerificationEngine:
             }
 
         # ---------------------------------------------------------
-        # Unknown state
+        # 4. Unknown state
         # ---------------------------------------------------------
 
         return {
@@ -124,7 +130,7 @@ class VerificationEngine:
             "verified": False,
             "vulnerability": identifier,
             "package": package,
-            "current_version": current_version,
+            "current_version": installed_version,
             "fixed_version": fixed_version,
             "reason": (
                 f"Unknown remediation status: "
