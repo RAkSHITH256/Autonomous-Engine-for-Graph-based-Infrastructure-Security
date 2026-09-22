@@ -9,9 +9,16 @@ def calculate_risk(
     target_criticality: str,
     path_length: int,
 ) -> RiskScore:
+    """
+    Core AEGIS risk calculation engine.
+    """
 
     score = 0.0
     factors = {}
+
+    # ---------------------------------------------------------
+    # 1. Vulnerability severity
+    # ---------------------------------------------------------
 
     severity_scores = {
         "LOW": 10,
@@ -21,29 +28,44 @@ def calculate_risk(
     }
 
     vulnerability_score = severity_scores.get(
-        vulnerability_severity.upper(), 0
+        vulnerability_severity.upper(),
+        0,
     )
 
     score += vulnerability_score
     factors["vulnerability_severity"] = vulnerability_score
 
+    # ---------------------------------------------------------
+    # 2. Exploitability
+    # ---------------------------------------------------------
+
     exploitability_scores = {
         "LOW": 5,
         "MEDIUM": 10,
         "HIGH": 20,
+        "CRITICAL": 20,
     }
 
     exploitability_score = exploitability_scores.get(
-        exploitability.upper(), 0
+        exploitability.upper(),
+        0,
     )
 
     score += exploitability_score
     factors["exploitability"] = exploitability_score
 
+    # ---------------------------------------------------------
+    # 3. External exposure
+    # ---------------------------------------------------------
+
     exposure_score = 20 if externally_reachable else 0
 
     score += exposure_score
     factors["external_exposure"] = exposure_score
+
+    # ---------------------------------------------------------
+    # 4. Target criticality
+    # ---------------------------------------------------------
 
     criticality_scores = {
         "LOW": 5,
@@ -53,18 +75,31 @@ def calculate_risk(
     }
 
     criticality_score = criticality_scores.get(
-        target_criticality.upper(), 0
+        target_criticality.upper(),
+        0,
     )
 
     score += criticality_score
     factors["target_criticality"] = criticality_score
 
-    path_score = max(0, 10 - path_length)
+    # ---------------------------------------------------------
+    # 5. Attack-path proximity
+    # ---------------------------------------------------------
+
+    path_score = max(0, 7 - path_length)
 
     score += path_score
     factors["path_proximity"] = path_score
 
+    # ---------------------------------------------------------
+    # 6. Normalize
+    # ---------------------------------------------------------
+
     score = min(score, 100)
+
+    # ---------------------------------------------------------
+    # 7. Risk level
+    # ---------------------------------------------------------
 
     if score >= 80:
         level = "CRITICAL"
@@ -74,6 +109,10 @@ def calculate_risk(
         level = "MEDIUM"
     else:
         level = "LOW"
+
+    # ---------------------------------------------------------
+    # 8. Explanation
+    # ---------------------------------------------------------
 
     explanation = (
         f"Risk is {level} because the asset has a "
@@ -87,6 +126,51 @@ def calculate_risk(
         level=level,
         factors=factors,
         explanation=explanation,
+    )
+
+
+def assess_risk(
+    vulnerability: dict,
+    attack_path: dict,
+) -> RiskScore:
+    """
+    Public risk-assessment interface.
+
+    Accepts the vulnerability and attack-path dictionaries
+    used throughout AEGIS.
+    """
+
+    vulnerability_severity = vulnerability.get(
+        "severity",
+        "UNKNOWN",
+    )
+
+    exploitability = vulnerability.get(
+        "exploitability",
+        "UNKNOWN",
+    )
+
+    externally_reachable = attack_path.get(
+        "external_exposure",
+        False,
+    )
+
+    target_criticality = attack_path.get(
+        "target_criticality",
+        "UNKNOWN",
+    )
+
+    path_length = attack_path.get(
+        "path_length",
+        0,
+    )
+
+    return calculate_risk(
+        vulnerability_severity=vulnerability_severity,
+        exploitability=exploitability,
+        externally_reachable=externally_reachable,
+        target_criticality=target_criticality,
+        path_length=path_length,
     )
 
 
@@ -120,18 +204,13 @@ def assess_attack_path_risks(client: Neo4jClient):
 
     for vulnerability in vulnerabilities:
 
-        risk = calculate_risk(
-            vulnerability_severity=vulnerability.get(
-                "severity",
-                "UNKNOWN",
-            ),
-            exploitability=vulnerability.get(
-                "exploitability",
-                "UNKNOWN",
-            ),
-            externally_reachable=externally_reachable,
-            target_criticality=target_criticality,
-            path_length=attack_path["path_length"],
+        risk = assess_risk(
+            vulnerability=vulnerability,
+            attack_path={
+                "external_exposure": externally_reachable,
+                "target_criticality": target_criticality,
+                "path_length": attack_path["path_length"],
+            },
         )
 
         assessments.append({

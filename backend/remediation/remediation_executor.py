@@ -1,5 +1,5 @@
 from typing import Any
-from datetime import datetime
+from datetime import datetime, UTC
 
 
 class RemediationExecutor:
@@ -10,14 +10,16 @@ class RemediationExecutor:
         simulate_success: bool = False,
     ):
         """
+        Execute or simulate remediation actions.
+
         dry_run:
-            No remediation state is changed.
+            Prevents real system changes.
 
         simulate_success:
             Simulates a successful remediation without
             modifying the real system.
 
-        Both options are safe for development/testing.
+        Both are safe for development and testing.
         """
 
         self.dry_run = dry_run
@@ -59,11 +61,11 @@ class RemediationExecutor:
             "P3",
         )
 
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now(UTC).isoformat()
 
-        # ========================================================
+        # =========================================================
         # 1. Approval check
-        # ========================================================
+        # =========================================================
 
         if not approved:
 
@@ -71,6 +73,7 @@ class RemediationExecutor:
                 "status": "PENDING_APPROVAL",
                 "executed": False,
                 "dry_run": self.dry_run,
+                "simulated": False,
                 "vulnerability": vulnerability,
                 "action": action,
                 "priority": priority,
@@ -81,11 +84,15 @@ class RemediationExecutor:
                 "timestamp": timestamp,
             }
 
-        # ========================================================
-        # 2. Validate package upgrade
-        # ========================================================
+        # =========================================================
+        # 2. Package upgrade
+        # =========================================================
 
         if action == "UPGRADE_PACKAGE":
+
+            # -----------------------------------------------------
+            # Fixed version validation
+            # -----------------------------------------------------
 
             if not fixed_version:
 
@@ -93,6 +100,7 @@ class RemediationExecutor:
                     "status": "FAILED",
                     "executed": False,
                     "dry_run": self.dry_run,
+                    "simulated": False,
                     "vulnerability": vulnerability,
                     "action": action,
                     "package": package,
@@ -106,9 +114,9 @@ class RemediationExecutor:
                     "timestamp": timestamp,
                 }
 
-            # ====================================================
-            # 3. Simulation-success mode
-            # ====================================================
+            # -----------------------------------------------------
+            # Simulation mode
+            # -----------------------------------------------------
 
             if self.simulate_success:
 
@@ -134,9 +142,9 @@ class RemediationExecutor:
                     "timestamp": timestamp,
                 }
 
-            # ====================================================
-            # 4. Normal dry-run
-            # ====================================================
+            # -----------------------------------------------------
+            # Normal dry-run
+            # -----------------------------------------------------
 
             if self.dry_run:
 
@@ -159,9 +167,9 @@ class RemediationExecutor:
                     "timestamp": timestamp,
                 }
 
-            # ====================================================
-            # 5. Real execution intentionally disabled
-            # ====================================================
+            # -----------------------------------------------------
+            # Real execution intentionally disabled
+            # -----------------------------------------------------
 
             return {
                 "status": "READY_FOR_EXECUTION",
@@ -183,9 +191,9 @@ class RemediationExecutor:
                 "timestamp": timestamp,
             }
 
-        # ========================================================
-        # 6. Unsupported remediation action
-        # ========================================================
+        # =========================================================
+        # 3. Unsupported action
+        # =========================================================
 
         return {
             "status": "UNSUPPORTED_ACTION",
@@ -194,6 +202,7 @@ class RemediationExecutor:
             "simulated": False,
             "vulnerability": vulnerability,
             "action": action,
+            "priority": priority,
             "message": (
                 f"Remediation action '{action}' "
                 "is not supported."
