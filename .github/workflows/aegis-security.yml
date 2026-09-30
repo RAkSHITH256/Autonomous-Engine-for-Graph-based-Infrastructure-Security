@@ -113,6 +113,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create reports directory
+        run: mkdir -p security/reports
+
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -120,13 +123,17 @@ jobs:
           format: cyclonedx-json
           output-file: security/reports/sbom.json
 
+      - name: Verify SBOM
+        run: |
+          ls -lh security/reports/sbom.json
+          test -s security/reports/sbom.json
+
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
           name: aegis-sbom
           path: security/reports/sbom.json
           retention-days: 30
-
   aegis-analysis:
     name: AEGIS Analysis and Report
     runs-on: ubuntu-latest
