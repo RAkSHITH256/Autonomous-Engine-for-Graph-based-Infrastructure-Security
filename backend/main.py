@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -8,14 +10,26 @@ from backend.remediation.remediation_engine import RemediationEngine
 from backend.remediation.remediation_executor import RemediationExecutor
 from backend.remediation.verification_engine import VerificationEngine
 from backend.orchestration.security_loop import SecurityLoop
-from backend.reassessment.reassessment_engine import ReassessmentEngine
 
+
+# ============================================================
+# APPLICATION
+# ============================================================
 
 app = FastAPI(
     title="AEGIS",
     description="Autonomous Engine for Graph-based Infrastructure Security",
     version="0.1.0",
 )
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+NEO4J_URI = "bolt://localhost:7687"
+NEO4J_USERNAME = "neo4j"
+NEO4J_PASSWORD = "aegisdev"
 
 
 # ============================================================
@@ -35,11 +49,97 @@ app.add_middleware(
 
 
 # ============================================================
+# HELPERS
+# ============================================================
+
+
+def create_neo4j_client() -> Neo4jClient:
+    """
+    Create a Neo4j client using the current AEGIS configuration.
+    """
+
+    return Neo4jClient(
+        NEO4J_URI,
+        NEO4J_USERNAME,
+        NEO4J_PASSWORD,
+    )
+
+
+def serialize_risk(risk: Any) -> dict[str, Any]:
+    """
+    Convert RiskScore into a JSON-compatible dictionary.
+    """
+
+    return {
+        "score": risk.score,
+        "level": risk.level,
+        "factors": risk.factors,
+        "explanation": risk.explanation,
+    }
+
+
+def analyze_assessments(
+    assessments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    Run the AEGIS decision and remediation planning stages
+    for every vulnerability assessment.
+
+    Execution is intentionally NOT performed here.
+    """
+
+    decision_engine = DecisionEngine()
+    remediation_engine = RemediationEngine()
+
+    results = []
+
+    for assessment in assessments:
+
+        vulnerability = assessment["vulnerability"]
+        risk = assessment["risk"]
+        attack_path = assessment["attack_path"]
+
+        # ----------------------------------------------------
+        # Risk -> Decision
+        # ----------------------------------------------------
+
+        decision = decision_engine.decide(risk)
+
+        # ----------------------------------------------------
+        # Decision -> Remediation
+        # ----------------------------------------------------
+
+        remediation = (
+            remediation_engine.generate_recommendation(
+                vulnerability=vulnerability,
+                decision=decision,
+            )
+        )
+
+        results.append(
+            {
+                "vulnerability": vulnerability,
+                "risk": serialize_risk(risk),
+                "decision": decision,
+                "remediation": remediation,
+                "attack_path": attack_path,
+            }
+        )
+
+    return results
+
+
+# ============================================================
 # HEALTH CHECK
 # ============================================================
 
+
 @app.get("/health")
 def health_check():
+    """
+    Basic AEGIS service health check.
+    """
+
     return {
         "status": "healthy",
         "service": "AEGIS",
@@ -48,162 +148,80 @@ def health_check():
 
 
 # ============================================================
-# COMPLETE AEGIS RISK ANALYSIS
+# RISK ANALYSIS
 # ============================================================
+
 
 @app.get("/risk")
 def assess_risk():
     """
-    Run the complete AEGIS security assessment.
-
-    Pipeline:
+    Run the AEGIS risk-analysis pipeline.
 
     Graph
-       ↓
+        ↓
     Attack Path
-       ↓
+        ↓
     Vulnerability
-       ↓
+        ↓
     Risk
-       ↓
+        ↓
     Decision
-       ↓
+        ↓
     Remediation
-       ↓
-    Execution
-       ↓
-    Verification
-       ↓
-    Reassessment
     """
 
-    client = Neo4jClient(
-        "bolt://localhost:7687",
-        "neo4j",
-        "aegisdev",
-    )
+    client = create_neo4j_client()
 
     try:
 
-        # --------------------------------------------------------
-        # 1. Attack path + vulnerability assessment
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Attack path + vulnerability assessment
+        # ----------------------------------------------------
 
         assessments = assess_attack_path_risks(client)
 
         if not assessments:
+
             return {
                 "status": "no_risk_assessment",
                 "message": "No vulnerable attack path was found.",
+                "finding_count": 0,
             }
 
-        # --------------------------------------------------------
-        # 2. Initialize engines
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Decision + remediation planning
+        # ----------------------------------------------------
 
-        decision_engine = DecisionEngine()
-        remediation_engine = RemediationEngine()
-
-        # Safe mode
-        executor = RemediationExecutor(
-            dry_run=True
+        results = analyze_assessments(
+            assessments
         )
 
-        verification_engine = VerificationEngine()
-        reassessment_engine = ReassessmentEngine()
-
-        vulnerability_results = []
-
-        # --------------------------------------------------------
-        # 3. Process every vulnerability
-        # --------------------------------------------------------
-
-        for assessment in assessments:
-
-            vulnerability = assessment["vulnerability"]
-            risk = assessment["risk"]
-            attack_path = assessment["attack_path"]
-
-            # Risk → Decision
-            decision = decision_engine.decide(risk)
-
-            # Decision → Remediation
-            remediation = (
-                remediation_engine.generate_recommendation(
-                    vulnerability=vulnerability,
-                    decision=decision,
-                )
-            )
-
-            # Remediation → Executor
-            execution = executor.execute(
-                remediation=remediation,
-                approved=False,
-            )
-
-            # Executor → Verification
-            verification = verification_engine.verify(
-                vulnerability=vulnerability,
-                remediation=execution,
-            )
-
-            # Verification → Reassessment
-            reassessment = reassessment_engine.reassess(
-                vulnerability=vulnerability,
-                verification=verification,
-                current_risk=risk,
-            )
-
-            vulnerability_results.append({
-
-                "vulnerability": vulnerability,
-
-                "risk": {
-                    "score": risk.score,
-                    "level": risk.level,
-                    "factors": risk.factors,
-                    "explanation": risk.explanation,
-                },
-
-                "decision": decision,
-
-                "remediation": remediation,
-
-                "execution": execution,
-
-                "verification": verification,
-
-                "reassessment": reassessment,
-
-                "attack_path": attack_path,
-            })
-
-        # --------------------------------------------------------
-        # 4. Determine overall risk
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Highest risk
+        # ----------------------------------------------------
 
         highest = max(
-            vulnerability_results,
+            results,
             key=lambda item: item["risk"]["score"],
         )
 
-        # --------------------------------------------------------
-        # 5. Return complete AEGIS response
-        # --------------------------------------------------------
+        # ----------------------------------------------------
+        # Response
+        # ----------------------------------------------------
 
         return {
             "status": "success",
-
             "attack_path": {
-                "path_length": assessments[0]["attack_path"]["path_length"],
-                "nodes": assessments[0]["attack_path"]["nodes"],
+                "path_length": assessments[0][
+                    "attack_path"
+                ]["path_length"],
+                "nodes": assessments[0][
+                    "attack_path"
+                ]["nodes"],
             },
-
             "overall_risk": highest["risk"],
-
-            "findings": vulnerability_results,
-
-            "finding_count": len(vulnerability_results),
+            "findings": results,
+            "finding_count": len(results),
         }
 
     finally:
@@ -211,14 +229,24 @@ def assess_risk():
         client.close()
 
 
-# ============================================================
-# DASHBOARD API
-# ============================================================
-
 @app.get("/dashboard")
 def dashboard():
     """
-    Return a dashboard-friendly AEGIS security summary.
+    Dynamic AEGIS dashboard.
+
+    The dashboard is generated directly from:
+
+    Neo4j
+        ↓
+    Attack Path
+        ↓
+    Vulnerability
+        ↓
+    Risk Engine
+        ↓
+    Decision Engine
+        ↓
+    Remediation Engine
     """
 
     client = Neo4jClient(
@@ -229,14 +257,17 @@ def dashboard():
 
     try:
 
+        # ========================================================
+        # 1. RUN REAL AEGIS RISK ENGINE
+        # ========================================================
+
         assessments = assess_attack_path_risks(client)
 
-        # --------------------------------------------------------
-        # No findings
-        # --------------------------------------------------------
+        # ========================================================
+        # 2. NO FINDINGS
+        # ========================================================
 
         if not assessments:
-
             return {
                 "status": "success",
 
@@ -246,34 +277,56 @@ def dashboard():
                     "finding_count": 0,
                 },
 
+                "risk": {
+                    "score": 0,
+                    "level": "LOW",
+                    "factors": [],
+                    "explanation": "No vulnerable attack path found.",
+                },
+
                 "attack_path": None,
 
                 "findings": [],
+
+                "lifecycle": [
+                    {
+                        "title": "DETECT",
+                        "description": "No findings detected",
+                    }
+                ],
             }
 
-        # --------------------------------------------------------
-        # Initialize engines
-        # --------------------------------------------------------
+        # ========================================================
+        # 3. INITIALIZE ENGINES
+        # ========================================================
 
         decision_engine = DecisionEngine()
         remediation_engine = RemediationEngine()
 
         findings = []
 
-        # --------------------------------------------------------
-        # Process findings
-        # --------------------------------------------------------
+        # ========================================================
+        # 4. PROCESS EVERY REAL ASSESSMENT
+        # ========================================================
 
         for assessment in assessments:
 
             vulnerability = assessment["vulnerability"]
+
             risk = assessment["risk"]
+
             attack_path = assessment["attack_path"]
 
-            # Decision
+            # ----------------------------------------------------
+            # Risk → Decision
+            # ----------------------------------------------------
+
             decision = decision_engine.decide(risk)
 
-            # Remediation
+            # ----------------------------------------------------
+            # Decision → Remediation
+            # ----------------------------------------------------
+
             remediation = (
                 remediation_engine.generate_recommendation(
                     vulnerability=vulnerability,
@@ -281,19 +334,64 @@ def dashboard():
                 )
             )
 
-            findings.append({
+            # ----------------------------------------------------
+            # DYNAMIC FINDING
+            # ----------------------------------------------------
 
+            finding = {
                 "vulnerability_id":
-                    vulnerability["identifier"],
+                    vulnerability.get(
+                        "identifier",
+                        vulnerability.get(
+                            "vulnerability_id",
+                            "UNKNOWN"
+                        )
+                    ),
 
                 "asset":
-                    vulnerability["asset_name"],
+                    vulnerability.get(
+                        "asset_name",
+                        vulnerability.get(
+                            "asset_id",
+                            "UNKNOWN"
+                        )
+                    ),
+
+                "asset_id":
+                    vulnerability.get(
+                        "asset_id"
+                    ),
 
                 "severity":
-                    vulnerability["severity"],
+                    vulnerability.get(
+                        "severity",
+                        "UNKNOWN"
+                    ),
 
                 "cvss":
-                    vulnerability["cvss_score"],
+                    vulnerability.get(
+                        "cvss_score"
+                    ),
+
+                "exploitability":
+                    vulnerability.get(
+                        "exploitability"
+                    ),
+
+                "package":
+                    vulnerability.get(
+                        "package"
+                    ),
+
+                "installed_version":
+                    vulnerability.get(
+                        "installed_version"
+                    ),
+
+                "fixed_version":
+                    vulnerability.get(
+                        "fixed_version"
+                    ),
 
                 "risk_score":
                     risk.score,
@@ -301,32 +399,88 @@ def dashboard():
                 "risk_level":
                     risk.level,
 
+                # IMPORTANT:
+                # Keep the actual factors generated by
+                # the risk engine.
+                "risk_factors":
+                    risk.factors,
+
+                "risk_explanation":
+                    risk.explanation,
+
                 "decision":
-                    decision["action"],
+                    decision.get(
+                        "action",
+                        "UNKNOWN"
+                    ),
 
                 "priority":
-                    decision["priority"],
+                    decision.get(
+                        "priority",
+                        "P3"
+                    ),
+
+                "decision_reason":
+                    decision.get(
+                        "reason"
+                    ),
 
                 "remediation":
-                    remediation["recommendation"],
-            })
+                    remediation.get(
+                        "recommendation",
+                        "No recommendation available."
+                    ),
 
-        # --------------------------------------------------------
-        # Highest risk
-        # --------------------------------------------------------
+                "attack_path":
+                    attack_path,
+            }
+
+            findings.append(finding)
+
+        # ========================================================
+        # 5. FIND HIGHEST RISK
+        # ========================================================
 
         highest = max(
             findings,
             key=lambda item: item["risk_score"],
         )
 
-        # --------------------------------------------------------
-        # Dashboard response
-        # --------------------------------------------------------
+        # ========================================================
+        # 6. EXTRACT REAL RISK DATA
+        # ========================================================
+
+        highest_risk = {
+            "score":
+                highest["risk_score"],
+
+            "level":
+                highest["risk_level"],
+
+            "factors":
+                highest.get(
+                    "risk_factors",
+                    []
+                ),
+
+            "explanation":
+                highest.get(
+                    "risk_explanation",
+                    ""
+                ),
+        }
+
+        # ========================================================
+        # 7. RETURN COMPLETE DYNAMIC DASHBOARD
+        # ========================================================
 
         return {
 
             "status": "success",
+
+            # ----------------------------------------------------
+            # Summary
+            # ----------------------------------------------------
 
             "summary": {
 
@@ -338,137 +492,75 @@ def dashboard():
 
                 "finding_count":
                     len(findings),
+
+                "risk_description":
+                    highest_risk[
+                        "explanation"
+                    ],
             },
 
+            # ----------------------------------------------------
+            # Complete risk engine output
+            # ----------------------------------------------------
+
+            "risk": highest_risk,
+
+            # ----------------------------------------------------
+            # Real Neo4j attack path
+            # ----------------------------------------------------
+
             "attack_path":
-                attack_path,
+                highest["attack_path"],
+
+            # ----------------------------------------------------
+            # Real findings
+            # ----------------------------------------------------
 
             "findings":
                 findings,
-        }
 
-    finally:
+            # ----------------------------------------------------
+            # Security lifecycle
+            # ----------------------------------------------------
 
-        client.close()
+            "lifecycle": [
 
+                {
+                    "title": "DETECT",
+                    "description":
+                        "Vulnerability discovered"
+                },
 
-# ============================================================
-# REMEDIATION EXECUTION API
-# ============================================================
+                {
+                    "title": "ANALYZE",
+                    "description":
+                        "Risk calculated"
+                },
 
-@app.post("/remediate")
-def remediate(
-    vulnerability_id: str = Query(...),
-    approved: bool = Query(False),
-):
-    """
-    Run the controlled AEGIS remediation loop.
+                {
+                    "title": "DECIDE",
+                    "description":
+                        "Priority determined"
+                },
 
-    Flow:
+                {
+                    "title": "REMEDIATE",
+                    "description":
+                        "Remediation generated"
+                },
 
-    Risk
-      ↓
-    Decision
-      ↓
-    Remediation
-      ↓
-    Approval
-      ↓
-    Execution
-      ↓
-    Verification
-      ↓
-    Reassessment
-    """
+                {
+                    "title": "VERIFY",
+                    "description":
+                        "Remediation verification"
+                },
 
-    client = Neo4jClient(
-        "bolt://localhost:7687",
-        "neo4j",
-        "aegisdev",
-    )
-
-    try:
-
-        # --------------------------------------------------------
-        # 1. Find current assessments
-        # --------------------------------------------------------
-
-        assessments = assess_attack_path_risks(client)
-
-        if not assessments:
-            return {
-                "status": "no_risk_assessment",
-                "message": "No vulnerable attack path was found.",
-            }
-
-        # --------------------------------------------------------
-        # 2. Find requested vulnerability
-        # --------------------------------------------------------
-
-        selected = None
-
-        for assessment in assessments:
-
-            vulnerability = assessment["vulnerability"]
-
-            if vulnerability.get("identifier") == vulnerability_id:
-                selected = assessment
-                break
-
-        if selected is None:
-
-            return {
-                "status": "not_found",
-                "message": (
-                    f"Vulnerability {vulnerability_id} "
-                    "was not found."
-                ),
-            }
-
-        vulnerability = selected["vulnerability"]
-        risk = selected["risk"]
-
-        # --------------------------------------------------------
-        # 3. Start Security Loop
-        # --------------------------------------------------------
-
-        security_loop = SecurityLoop(
-            dry_run=True
-        )
-
-        result = security_loop.process(
-            vulnerability=vulnerability,
-            risk=risk,
-            approved=approved,
-        )
-
-        # --------------------------------------------------------
-        # 4. Return complete lifecycle result
-        # --------------------------------------------------------
-
-        return {
-            "status": "success",
-
-            "vulnerability": vulnerability,
-
-            "risk": {
-                "score": risk.score,
-                "level": risk.level,
-                "factors": risk.factors,
-                "explanation": risk.explanation,
-            },
-
-            "decision": result["decision"],
-
-            "remediation": result["remediation"],
-
-            "execution": result["execution"],
-
-            "verification": result["verification"],
-
-            "reassessment": result["reassessment"],
-
-            "loop_status": result["loop_status"],
+                {
+                    "title": "REASSESS",
+                    "description":
+                        "Risk reassessment"
+                },
+            ],
         }
 
     finally:
