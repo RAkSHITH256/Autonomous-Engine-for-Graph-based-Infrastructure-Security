@@ -13,56 +13,48 @@ on:
   workflow_dispatch:
 
 
-# ============================================================
-# 1. TEST
-# ============================================================
 jobs:
 
+  # ============================================================
+  # 1. AEGIS TESTS
+  # ============================================================
   test:
     name: AEGIS Tests
     runs-on: ubuntu-latest
 
     steps:
-
-      # --------------------------------------------------------
-      # Checkout
-      # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------------
-      # Python
-      # --------------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
-
-      # --------------------------------------------------------
-      # Install dependencies
-      # --------------------------------------------------------
-      - name: Install dependencies
+      - name: Upgrade pip
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirement.txt
-          python -m pip install pytest
 
+      - name: Install AEGIS dependencies
+        run: |
+          pip install -r requirement.txt
+          pip install pytest neo4j
 
-      # --------------------------------------------------------
-      # Run AEGIS tests
-      # --------------------------------------------------------
+      - name: Verify Python environment
+        run: |
+          python --version
+          pip --version
+          pytest --version
+
       - name: Run AEGIS tests
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: .
         run: |
-          python -m pytest -q
+          pytest -q
 
 
   # ============================================================
-  # 2. TRIVY
+  # 2. TRIVY SECURITY SCAN
   # ============================================================
   trivy:
     name: Trivy Security Scan
@@ -70,14 +62,9 @@ jobs:
     needs: test
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------------
-      # Trivy filesystem scan
-      # --------------------------------------------------------
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -89,7 +76,7 @@ jobs:
 
 
   # ============================================================
-  # 3. SEMGREP
+  # 3. SEMGREP CODE SCAN
   # ============================================================
   semgrep:
     name: Semgrep Code Scan
@@ -97,31 +84,17 @@ jobs:
     needs: test
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------------
-      # Install Semgrep
-      # --------------------------------------------------------
-      - name: Install Semgrep
-        run: |
-          python -m pip install semgrep
-
-
-      # --------------------------------------------------------
-      # Run Semgrep
-      # --------------------------------------------------------
       - name: Run Semgrep
-        run: |
-          semgrep scan \
-            --config p/python \
-            --error
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: p/python
 
 
   # ============================================================
-  # 4. SBOM
+  # 4. SBOM GENERATION
   # ============================================================
   sbom:
     name: Generate SBOM
@@ -129,14 +102,9 @@ jobs:
     needs: test
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------------
-      # Generate CycloneDX SBOM
-      # --------------------------------------------------------
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -144,10 +112,6 @@ jobs:
           format: cyclonedx-json
           output-file: sbom.json
 
-
-      # --------------------------------------------------------
-      # Upload SBOM
-      # --------------------------------------------------------
       - name: Upload SBOM
         uses: actions/upload-artifact@v4
         with:
@@ -156,7 +120,7 @@ jobs:
 
 
   # ============================================================
-  # 5. AEGIS ANALYSIS
+  # 5. AEGIS RISK ANALYSIS
   # ============================================================
   aegis:
     name: AEGIS Risk Analysis
@@ -169,51 +133,33 @@ jobs:
       - sbom
 
     steps:
-
-      # --------------------------------------------------------
-      # Checkout
-      # --------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-
-      # --------------------------------------------------------
-      # Python
-      # --------------------------------------------------------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
-
-      # --------------------------------------------------------
-      # Install dependencies
-      # --------------------------------------------------------
-      - name: Install dependencies
+      - name: Upgrade pip
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirement.txt
-          python -m pip install pytest
 
-
-      # --------------------------------------------------------
-      # Run AEGIS tests again
-      # --------------------------------------------------------
-      - name: Validate AEGIS pipeline
-        env:
-          PYTHONPATH: ${{ github.workspace }}
+      - name: Install AEGIS dependencies
         run: |
-          python -m pytest -q
+          pip install -r requirement.txt
+          pip install pytest neo4j
 
+      - name: Run complete AEGIS test suite
+        env:
+          PYTHONPATH: .
+        run: |
+          pytest -q
 
-      # --------------------------------------------------------
-      # AEGIS architecture validation
-      # --------------------------------------------------------
-      - name: AEGIS pipeline validation
+      - name: Validate AEGIS architecture
         run: |
           echo "=========================================="
-          echo "        AEGIS SECURITY PIPELINE"
+          echo "       AEGIS SECURITY ANALYSIS"
           echo "=========================================="
           echo ""
           echo "Collection       ✓"
@@ -225,11 +171,11 @@ jobs:
           echo "Verification     ✓"
           echo "Reassessment     ✓"
           echo ""
-          echo "AEGIS pipeline validation completed."
+          echo "AEGIS analysis completed successfully."
 
 
   # ============================================================
-  # 6. SECURITY GATE
+  # 6. FINAL SECURITY GATE
   # ============================================================
   security-gate:
     name: AEGIS Security Gate
@@ -243,8 +189,7 @@ jobs:
       - aegis
 
     steps:
-
-      - name: Security gate
+      - name: Security gate passed
         run: |
           echo "=========================================="
           echo "          AEGIS SECURITY GATE"
@@ -256,4 +201,6 @@ jobs:
           echo "✓ SBOM generated"
           echo "✓ AEGIS risk analysis completed"
           echo ""
+          echo "=========================================="
           echo "STATUS: SECURITY PIPELINE PASSED"
+          echo "=========================================="
