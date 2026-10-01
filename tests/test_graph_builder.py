@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -175,3 +176,22 @@ def test_build_custom_graph():
     assert builder.add_asset.call_count == 2
     assert builder.connect_assets.call_count == 1
     assert builder.add_vulnerability.call_count == 1
+
+def test_connect_assets_allows_runs_image():
+    client = MagicMock()
+
+    builder = GraphBuilder(client)
+
+    builder.connect_assets(
+        source_asset_id="docker-container:abc123",
+        target_asset_id="docker-image:def456",
+        relationship="RUNS_IMAGE",
+    )
+
+    session = client.driver.session.return_value.__enter__.return_value
+
+    session.run.assert_called_once()
+
+    query = session.run.call_args[0][0]
+
+    assert "RUNS_IMAGE" in query

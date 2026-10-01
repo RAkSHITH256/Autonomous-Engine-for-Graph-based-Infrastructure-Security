@@ -7,21 +7,13 @@ class GraphBuilder:
     """
     Builds the AEGIS infrastructure security graph.
 
-    Graph structure:
+    Graph structure can contain:
 
-        Internet
-            |
-        CONNECTS_TO
-            |
-        Web Server
-            |
-        CONNECTS_TO
-            |
-        Application Server
-            |
-        CONNECTS_TO
-            |
-        Production DB
+        Asset -[:CONNECTS_TO]-> Asset
+        Asset -[:DEPENDS_ON]-> Asset
+        Asset -[:HOSTS]-> Asset
+        Asset -[:COMMUNICATES_WITH]-> Asset
+        Container -[:RUNS_IMAGE]-> ContainerImage
 
     Vulnerabilities are attached to assets using:
 
@@ -103,17 +95,21 @@ class GraphBuilder:
         """
         Create a relationship between two assets.
 
-        Example:
+        Supported relationships:
 
-            Internet -> Web Server
+            CONNECTS_TO
+            DEPENDS_ON
+            HOSTS
+            COMMUNICATES_WITH
+            RUNS_IMAGE
         """
 
-        # Only allow known relationship types.
         allowed_relationships = {
             "CONNECTS_TO",
             "DEPENDS_ON",
             "HOSTS",
             "COMMUNICATES_WITH",
+            "RUNS_IMAGE",
         }
 
         if relationship not in allowed_relationships:
@@ -225,7 +221,8 @@ class GraphBuilder:
         """
         Build a deterministic demonstration graph.
 
-        This is useful for:
+        Useful for:
+
             - development
             - demonstrations
             - integration testing
@@ -332,6 +329,11 @@ class GraphBuilder:
                     "source": "internet-001",
                     "target": "web-001",
                     "type": "CONNECTS_TO"
+                },
+                {
+                    "source": "container-001",
+                    "target": "image-001",
+                    "type": "RUNS_IMAGE"
                 }
             ]
 
@@ -344,6 +346,10 @@ class GraphBuilder:
                 }
             ]
         """
+
+        # -----------------------------------------------------
+        # Assets
+        # -----------------------------------------------------
 
         for asset in assets:
 
@@ -361,6 +367,10 @@ class GraphBuilder:
                 ),
             )
 
+        # -----------------------------------------------------
+        # Relationships
+        # -----------------------------------------------------
+
         for relationship in relationships:
 
             self.connect_assets(
@@ -375,6 +385,10 @@ class GraphBuilder:
                     "CONNECTS_TO",
                 ),
             )
+
+        # -----------------------------------------------------
+        # Vulnerabilities
+        # -----------------------------------------------------
 
         for item in vulnerabilities:
 

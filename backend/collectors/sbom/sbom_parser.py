@@ -7,13 +7,20 @@ class SBOMParser:
     dependency representation used by AEGIS.
     """
 
-    def parse(self, sbom: dict[str, Any]) -> list[dict[str, Any]]:
+    def parse(
+        self,
+        sbom: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+
         if not isinstance(sbom, dict):
             raise TypeError(
                 "SBOM must be a dictionary."
             )
 
-        components = sbom.get("components", [])
+        components = sbom.get(
+            "components",
+            [],
+        )
 
         if not isinstance(components, list):
             raise ValueError(
@@ -34,26 +41,33 @@ class SBOMParser:
 
             dependency = {
                 "name": name,
+
                 "version": component.get(
                     "version",
                     "UNKNOWN",
                 ),
+
                 "type": component.get(
                     "type",
                     "library",
                 ),
+
                 "purl": component.get(
                     "purl",
                 ),
+
                 "group": component.get(
                     "group",
                 ),
+
                 "scope": component.get(
                     "scope",
                     "required",
                 ),
             }
 
-            dependencies.append(dependency)
+            dependencies.append(
+                dependency
+            )
 
         return dependencies

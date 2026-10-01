@@ -1,6 +1,22 @@
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.collection.collection_engine import CollectionEngine
+
+from backend.collectors.trivy.trivy_parser import TrivyParser
+from backend.collectors.semgrep.semgrep_parser import parse_semgrep_results
+from backend.collectors.sbom.sbom_parser import SBOMParser
+
+from backend.models.evidence import SecurityEvidence
+
+from backend.graph.finding_graph_integrator import (
+    FindingGraphIntegrator,
+)
+from backend.graph.graph_builder import GraphBuilder
+from backend.models.asset import Asset
+
 from backend.decision.decision_engine import DecisionEngine
 from backend.remediation.remediation_engine import RemediationEngine
 from backend.remediation.remediation_executor import RemediationExecutor
@@ -16,6 +32,7 @@ class SecurityLoop:
         simulate_success: bool = False,
     ):
         self.collection_engine = CollectionEngine()
+        self.graph_integrator = None
 
         self.decision_engine = DecisionEngine()
         self.remediation_engine = RemediationEngine()
@@ -27,6 +44,31 @@ class SecurityLoop:
 
         self.verification_engine = VerificationEngine()
         self.reassessment_engine = ReassessmentEngine()
+
+    # =============================================================
+    # GRAPH INTEGRATION
+    # =============================================================
+
+    def integrate_findings_with_graph(
+        self,
+        findings,
+        assets: list[Asset],
+        graph_builder: GraphBuilder,
+    ) -> dict[str, Any]:
+        """
+        Correlate normalized security findings with known
+        infrastructure assets and store the correlations
+        in Neo4j.
+        """
+
+        self.graph_integrator = FindingGraphIntegrator(
+            graph_builder=graph_builder,
+        )
+
+        return self.graph_integrator.integrate(
+            findings=findings,
+            assets=assets,
+        )
 
     # =============================================================
     # EXISTING SINGLE-VULNERABILITY FLOW
@@ -87,6 +129,127 @@ class SecurityLoop:
             "reassessment": reassessment,
 
             "loop_status": reassessment["status"],
+        }
+
+    # =============================================================
+    # REAL CI SECURITY EVIDENCE
+    # =============================================================
+
+    def collect_from_ci_reports(
+        self,
+        reports_dir: str = "security/reports",
+        asset_id: str = "aegis-application",
+    ) -> dict[str, Any]:
+        """
+        Load real Trivy, Semgrep and SBOM reports produced by CI.
+
+        Expected files:
+
+            security/reports/
+            ├── trivy.json
+            ├── semgrep.json
+            └── sbom.json
+
+        The reports are parsed and converted into normalized
+        AEGIS Finding objects.
+        """
+
+        reports_path = Path(reports_dir)
+
+        trivy_path = reports_path / "trivy.json"
+        semgrep_path = reports_path / "semgrep.json"
+        sbom_path = reports_path / "sbom.json"
+
+        # ---------------------------------------------------------
+        # Trivy
+        # ---------------------------------------------------------
+
+        trivy_findings = []
+
+        if trivy_path.exists():
+
+            with trivy_path.open(
+                "r",
+                encoding="utf-8",
+            ) as file:
+                trivy_data = json.load(file)
+
+            trivy_evidence = SecurityEvidence(
+                evidence_id="ci-trivy",
+                source="trivy",
+                evidence_type="container_vulnerability_scan",
+                timestamp=datetime.now(timezone.utc),
+                raw_data=trivy_data,
+                metadata={
+                    "image": asset_id,
+                },
+            )
+
+            trivy_findings = TrivyParser().parse(
+                trivy_evidence
+            )
+
+        # ---------------------------------------------------------
+        # Semgrep
+        # ---------------------------------------------------------
+
+        semgrep_findings = []
+
+        if semgrep_path.exists():
+
+            with semgrep_path.open(
+                "r",
+                encoding="utf-8",
+            ) as file:
+                semgrep_data = json.load(file)
+
+            semgrep_findings = parse_semgrep_results(
+                semgrep_data,
+                asset_id=asset_id,
+            )
+
+        # ---------------------------------------------------------
+        # SBOM
+        # ---------------------------------------------------------
+
+        sbom_dependencies = []
+
+        if sbom_path.exists():
+
+            with sbom_path.open(
+                "r",
+                encoding="utf-8",
+            ) as file:
+                sbom_data = json.load(file)
+
+            sbom_dependencies = SBOMParser().parse(
+                sbom_data
+            )
+
+        # ---------------------------------------------------------
+        # Unified AEGIS collection
+        # ---------------------------------------------------------
+
+        findings = self.collect_findings(
+            trivy_findings=trivy_findings,
+            semgrep_findings=semgrep_findings,
+            sbom_dependencies=sbom_dependencies,
+            asset_id=asset_id,
+        )
+
+        # ---------------------------------------------------------
+        # Summary
+        # ---------------------------------------------------------
+
+        summary = self.collection_summary(
+            findings
+        )
+
+        return {
+            "status": "success",
+            "reports_dir": str(reports_path),
+            "findings": findings,
+            "summary": summary,
         }
 
     # =============================================================
