@@ -11,6 +11,8 @@ from backend.collectors.sbom.sbom_parser import SBOMParser
 
 from backend.models.evidence import SecurityEvidence
 
+from backend.discovery.docker_discovery import DockerDiscovery
+
 from backend.graph.finding_graph_integrator import (
     FindingGraphIntegrator,
 )
@@ -69,6 +71,105 @@ class SecurityLoop:
             findings=findings,
             assets=assets,
         )
+
+    # =============================================================
+    # DOCKER INFRASTRUCTURE DISCOVERY
+    # =============================================================
+
+    def discover_and_import_docker(
+        self,
+        graph_builder: GraphBuilder,
+    ) -> dict[str, Any]:
+        """
+        Discover the current Docker infrastructure and import it
+        into the AEGIS security graph.
+
+        Discovery provides:
+
+            - Docker containers
+            - Docker images
+            - Container -> image relationships
+
+        The discovered infrastructure is converted into the
+        GraphBuilder format and persisted in Neo4j.
+        """
+
+        # ---------------------------------------------------------
+        # Discover Docker infrastructure
+        # ---------------------------------------------------------
+
+        discovery = DockerDiscovery()
+
+        discovery_result = discovery.discover()
+
+        discovered_assets = discovery_result["assets"]
+
+        discovered_relationships = discovery_result[
+            "relationships"
+        ]
+
+        # ---------------------------------------------------------
+        # Convert Asset models to GraphBuilder format
+        # ---------------------------------------------------------
+
+        graph_assets = []
+
+        for asset in discovered_assets:
+
+            graph_assets.append(
+                {
+                    "asset_id": asset.asset_id,
+                    "name": asset.name,
+                    "type": asset.asset_type,
+                    "criticality": asset.metadata.get(
+                        "criticality",
+                        "UNKNOWN",
+                    ),
+                    "metadata": asset.metadata,
+                }
+            )
+
+        # ---------------------------------------------------------
+        # Convert relationships to GraphBuilder format
+        # ---------------------------------------------------------
+
+        graph_relationships = []
+
+        for relationship in discovered_relationships:
+
+            graph_relationships.append(
+                {
+                    "source": relationship["source"],
+                    "target": relationship["target"],
+                    "type": relationship["relationship"],
+                }
+            )
+
+        # ---------------------------------------------------------
+        # Persist infrastructure graph
+        # ---------------------------------------------------------
+
+        graph_builder.build_graph(
+            assets=graph_assets,
+            relationships=graph_relationships,
+            vulnerabilities=[],
+        )
+
+        # ---------------------------------------------------------
+        # Return discovery result
+        # ---------------------------------------------------------
+
+        return {
+            "status": "success",
+            "assets_discovered": len(
+                discovered_assets
+            ),
+            "relationships_discovered": len(
+                discovered_relationships
+            ),
+            "assets": discovered_assets,
+            "relationships": discovered_relationships,
+        }
 
     # =============================================================
     # EXISTING SINGLE-VULNERABILITY FLOW

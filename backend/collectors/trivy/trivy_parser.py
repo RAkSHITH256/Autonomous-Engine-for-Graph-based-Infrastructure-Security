@@ -8,32 +8,39 @@ class TrivyParser:
 
         results = evidence.raw_data.get("Results", [])
 
+        image = evidence.metadata.get("image", "UNKNOWN")
+
         for result in results:
-            vulnerabilities = result.get("Vulnerabilities", [])
+            vulnerabilities = result.get("Vulnerabilities") or []
 
             for vulnerability in vulnerabilities:
                 vulnerability_id = vulnerability.get(
-                    "VulnerabilityID",
-                    "UNKNOWN"
+                    "VulnerabilityID", "UNKNOWN"
                 )
 
                 severity = vulnerability.get(
-                    "Severity",
-                    "UNKNOWN"
+                    "Severity", "UNKNOWN"
                 )
 
                 package = vulnerability.get(
-                    "PkgName",
-                    "UNKNOWN"
+                    "PkgName", "UNKNOWN"
                 )
 
                 installed_version = vulnerability.get(
-                    "InstalledVersion",
-                    "UNKNOWN"
+                    "InstalledVersion", ""
                 )
 
                 fixed_version = vulnerability.get(
-                    "FixedVersion",
+                    "FixedVersion", ""
+                )
+
+                target = result.get(
+                    "Target",
+                    image
+                )
+
+                target_type = result.get(
+                    "Type",
                     "UNKNOWN"
                 )
 
@@ -43,18 +50,21 @@ class TrivyParser:
                     severity=severity,
                     title=f"{vulnerability_id} in {package}",
                     description=(
-                        f"Trivy detected {vulnerability_id} in "
-                        f"{package} version {installed_version}. "
-                        f"Fixed version: {fixed_version or 'not available'}."
+                        vulnerability.get("Description")
+                        or f"{vulnerability_id} detected in {package}"
                     ),
-                    asset_id=evidence.metadata["image"],
+                    asset_id=image,
                     evidence_ids=[evidence.evidence_id],
                     metadata={
-                        "vulnerability_id": vulnerability_id,
-                        "package": package,
-                        "installed_version": installed_version,
-                        "fixed_version": fixed_version,
-                    },
+    "source": "TRIVY",
+    "vulnerability_id": vulnerability_id,
+    "package": package,
+    "installed_version": installed_version,
+    "fixed_version": fixed_version,
+    "target": target,
+    "target_type": target_type,
+    "image_id": evidence.metadata.get("image_id"),
+},
                 )
 
                 findings.append(finding)

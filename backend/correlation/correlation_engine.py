@@ -3,40 +3,153 @@ from backend.models.asset import Asset
 
 
 class CorrelationEngine:
+    """
+    Correlates normalized AEGIS findings with infrastructure assets.
+
+    Supports:
+
+        1. Direct asset ID correlation
+        2. Docker image reference correlation
+        3. Docker image ID correlation
+    """
+
+    # =========================================================
+    # NORMALIZE IMAGE ID
+    # =========================================================
+
+    @staticmethod
+    def _normalize_image_id(
+        image_id: str | None,
+    ) -> str:
+        """
+        Normalize Docker image IDs.
+
+        Examples:
+
+            sha256:abcdef123
+            abcdef123
+
+        become:
+
+            abcdef123
+        """
+
+        if not image_id:
+            return ""
+
+        normalized = str(image_id).strip()
+
+        if normalized.startswith("sha256:"):
+            normalized = normalized[
+                len("sha256:") :
+            ]
+
+        return normalized
+
+    # =========================================================
+    # CORRELATE SINGLE FINDING
+    # =========================================================
 
     def correlate_finding(
         self,
         finding: Finding,
         assets: list[Asset],
     ) -> Asset | None:
+        """
+        Match a finding to an infrastructure asset.
+
+        Correlation order:
+
+            1. Direct asset ID
+            2. Image reference
+            3. Docker image ID
+        """
 
         # ---------------------------------------------------------
         # 1. Direct asset ID correlation
         # ---------------------------------------------------------
+
         for asset in assets:
+
             if asset.asset_id == finding.asset_id:
                 return asset
 
         # ---------------------------------------------------------
-        # 2. Image-based correlation
-        #
-        # Trivy stores the affected image in finding.asset_id.
-        # Infrastructure assets store their image in metadata["image"].
+        # 2. Image reference correlation
         # ---------------------------------------------------------
+
         finding_image = finding.asset_id
 
         if finding_image:
+
             for asset in assets:
 
-                asset_image = asset.metadata.get("image")
+                asset_image = asset.metadata.get(
+                    "image"
+                )
 
-                if asset_image == finding_image:
+                image_reference = asset.metadata.get(
+                    "image_reference"
+                )
+
+                if (
+                    asset_image == finding_image
+                    or image_reference == finding_image
+                ):
                     return asset
 
         # ---------------------------------------------------------
-        # No correlation found
+        # 3. Docker image ID correlation
         # ---------------------------------------------------------
+
+        finding_image_id = (
+            finding.metadata.get(
+                "image_id"
+            )
+        )
+
+        normalized_finding_image_id = (
+            self._normalize_image_id(
+                finding_image_id
+            )
+        )
+
+        if normalized_finding_image_id:
+
+            for asset in assets:
+
+                asset_image_id = asset.metadata.get(
+                    "image_id"
+                )
+
+                normalized_asset_image_id = (
+                    self._normalize_image_id(
+                        asset_image_id
+                    )
+                )
+
+                if not normalized_asset_image_id:
+                    continue
+
+                if (
+                    normalized_finding_image_id.startswith(
+                        normalized_asset_image_id
+                    )
+                    or normalized_asset_image_id.startswith(
+                        normalized_finding_image_id
+                    )
+                ):
+                    return asset
+
+        # ---------------------------------------------------------
+        # No correlation
+        # ---------------------------------------------------------
+
         return None
+
+    # =========================================================
+    # CORRELATE MULTIPLE FINDINGS
+    # =========================================================
 
     def correlate_findings(
         self,
@@ -54,9 +167,16 @@ class CorrelationEngine:
             )
 
             if asset is not None:
-                correlations[finding.finding_id] = asset
+
+                correlations[
+                    finding.finding_id
+                ] = asset
 
         return correlations
+
+    # =========================================================
+    # STORE CORRELATIONS
+    # =========================================================
 
     def store_correlations(
         self,
@@ -64,9 +184,10 @@ class CorrelationEngine:
         findings: list[Finding],
         client,
     ) -> None:
+        """
+        Persist finding/vulnerability relationships in Neo4j.
+        """
 
-        # Create a quick lookup:
-        # finding_id -> Finding object
         finding_map = {
             finding.finding_id: finding
             for finding in findings
@@ -74,7 +195,9 @@ class CorrelationEngine:
 
         for finding_id, asset in correlations.items():
 
-            finding = finding_map[finding_id]
+            finding = finding_map[
+                finding_id
+            ]
 
             query = """
             MERGE (asset:Asset {
@@ -102,11 +225,20 @@ class CorrelationEngine:
             })
 
             SET
-                vulnerability.identifier = $vulnerability_identifier,
-                vulnerability.severity = $severity,
-                vulnerability.package = $package,
-                vulnerability.installed_version = $installed_version,
-                vulnerability.fixed_version = $fixed_version
+                vulnerability.identifier =
+                    $vulnerability_identifier,
+
+                vulnerability.severity =
+                    $severity,
+
+                vulnerability.package =
+                    $package,
+
+                vulnerability.installed_version =
+                    $installed_version,
+
+                vulnerability.fixed_version =
+                    $fixed_version
 
             MERGE (finding)-[:IDENTIFIES]->(vulnerability)
 
@@ -118,33 +250,51 @@ class CorrelationEngine:
                 session.run(
                     query,
 
-                    # -------------------------
+                    # -------------------------------------------------
                     # Asset
-                    # -------------------------
+                    # -------------------------------------------------
+
                     asset_id=asset.asset_id,
+
                     asset_name=asset.name,
+
                     asset_type=asset.asset_type,
-                    asset_image=asset.metadata.get("image"),
 
-                    # -------------------------
-                    # Finding
-                    # -------------------------
-                    finding_id=finding.finding_id,
-                    category=finding.category,
-                    severity=finding.severity,
-                    title=finding.title,
-
-                    # -------------------------
-                    # Vulnerability
-                    # -------------------------
-                    vulnerability_id=finding.metadata.get(
-                        "vulnerability_id",
-                        finding.finding_id,
+                    asset_image=asset.metadata.get(
+                        "image",
+                        asset.metadata.get(
+                            "image_reference"
+                        ),
                     ),
 
-                    vulnerability_identifier=finding.metadata.get(
-                        "vulnerability_id",
-                        "UNKNOWN",
+                    # -------------------------------------------------
+                    # Finding
+                    # -------------------------------------------------
+
+                    finding_id=finding.finding_id,
+
+                    category=finding.category,
+
+                    severity=finding.severity,
+
+                    title=finding.title,
+
+                    # -------------------------------------------------
+                    # Vulnerability
+                    # -------------------------------------------------
+
+                    vulnerability_id=(
+                        finding.metadata.get(
+                            "vulnerability_id",
+                            finding.finding_id,
+                        )
+                    ),
+
+                    vulnerability_identifier=(
+                        finding.metadata.get(
+                            "vulnerability_id",
+                            "UNKNOWN",
+                        )
                     ),
 
                     package=finding.metadata.get(
@@ -152,13 +302,17 @@ class CorrelationEngine:
                         "UNKNOWN",
                     ),
 
-                    installed_version=finding.metadata.get(
-                        "installed_version",
-                        "UNKNOWN",
+                    installed_version=(
+                        finding.metadata.get(
+                            "installed_version",
+                            "UNKNOWN",
+                        )
                     ),
 
-                    fixed_version=finding.metadata.get(
-                        "fixed_version",
-                        "",
+                    fixed_version=(
+                        finding.metadata.get(
+                            "fixed_version",
+                            "",
+                        )
                     ),
                 )

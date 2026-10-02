@@ -1,5 +1,5 @@
+import json
 from typing import Any
-
 from backend.graph.neo4j_client import Neo4jClient
 
 
@@ -60,6 +60,11 @@ class GraphBuilder:
 
         metadata = metadata or {}
 
+        metadata_json = json.dumps(
+              metadata,
+              default=str,
+)
+
         query = """
         MERGE (asset:Asset {
             asset_id: $asset_id
@@ -79,7 +84,7 @@ class GraphBuilder:
                 name=name,
                 asset_type=asset_type,
                 criticality=criticality,
-                metadata=metadata,
+                metadata=metadata_json,
             )
 
     # =========================================================

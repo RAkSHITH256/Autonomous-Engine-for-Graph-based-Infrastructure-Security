@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from backend.graph.graph_builder import GraphBuilder
 from backend.models.asset import Asset
@@ -22,8 +22,6 @@ def test_security_loop_dry_run():
         "fixed_version": "1.2.5",
     }
 
-    # Use the same structure expected by the existing
-    # DecisionEngine / RemediationEngine.
     risk = SimpleNamespace(
         score=96,
         level="CRITICAL",
@@ -49,11 +47,9 @@ def test_security_loop_dry_run():
         approved=True,
     )
 
-    # Decision
     assert result["decision"]["action"] == "IMMEDIATE_REMEDIATION"
     assert result["decision"]["priority"] == "P0"
 
-    # Remediation
     assert (
         result["remediation"]["remediation_action"]
         == "UPGRADE_PACKAGE"
@@ -64,24 +60,21 @@ def test_security_loop_dry_run():
         == "1.2.5"
     )
 
-    # Execution
     assert result["execution"]["status"] == "DRY_RUN"
     assert result["execution"]["executed"] is False
     assert result["execution"]["dry_run"] is True
 
-    # Verification
     assert result["verification"]["status"] == "NOT_VERIFIED"
     assert result["verification"]["verified"] is False
 
-    # Reassessment
     assert result["reassessment"]["status"] == "WAITING"
     assert (
         result["reassessment"]["action"]
         == "WAIT_FOR_REMEDIATION"
     )
 
-    # Complete lifecycle
     assert result["loop_status"] == "WAITING"
+
 
 def test_security_loop_graph_integration():
 
@@ -89,19 +82,11 @@ def test_security_loop_graph_integration():
         dry_run=True
     )
 
-    # ---------------------------------------------------------
-    # Mock graph builder
-    # ---------------------------------------------------------
-
     client = MagicMock()
 
     graph_builder = GraphBuilder(
         client
     )
-
-    # ---------------------------------------------------------
-    # Infrastructure asset
-    # ---------------------------------------------------------
 
     asset = Asset(
         asset_id="app-001",
@@ -112,10 +97,6 @@ def test_security_loop_graph_integration():
             "image": "aegis-api:latest",
         },
     )
-
-    # ---------------------------------------------------------
-    # Realistic Trivy-style finding
-    # ---------------------------------------------------------
 
     finding = Finding(
         finding_id="trivy-CVE-001-openssl",
@@ -133,19 +114,11 @@ def test_security_loop_graph_integration():
         },
     )
 
-    # ---------------------------------------------------------
-    # Integrate
-    # ---------------------------------------------------------
-
     result = loop.integrate_findings_with_graph(
         findings=[finding],
         assets=[asset],
         graph_builder=graph_builder,
     )
-
-    # ---------------------------------------------------------
-    # Validate
-    # ---------------------------------------------------------
 
     assert result["status"] == "success"
 
@@ -158,3 +131,70 @@ def test_security_loop_graph_integration():
     assert result["correlations"][
         "trivy-CVE-001-openssl"
     ] == "app-001"
+
+
+def test_security_loop_docker_discovery():
+
+    loop = SecurityLoop()
+
+    client = MagicMock()
+
+    graph_builder = GraphBuilder(
+        client
+    )
+
+    docker_assets = [
+        Asset(
+            asset_id="docker-container:abc123",
+            asset_type="CONTAINER",
+            name="test-container",
+            metadata={
+                "source": "docker",
+                "image": "test-image:latest",
+                "state": "RUNNING",
+            },
+        ),
+        Asset(
+            asset_id="docker-image:def456",
+            asset_type="CONTAINER_IMAGE",
+            name="test-image:latest",
+            metadata={
+                "source": "docker",
+                "image_id": "def456",
+            },
+        ),
+    ]
+
+    docker_relationships = [
+        {
+            "source": "docker-container:abc123",
+            "target": "docker-image:def456",
+            "relationship": "RUNS_IMAGE",
+        }
+    ]
+
+    with patch(
+        "backend.orchestration.security_loop.DockerDiscovery"
+    ) as mock_discovery:
+
+        mock_discovery.return_value.discover.return_value = {
+            "assets": docker_assets,
+            "relationships": docker_relationships,
+        }
+
+        result = loop.discover_and_import_docker(
+            graph_builder=graph_builder
+        )
+
+    assert result["status"] == "success"
+
+    assert result["assets_discovered"] == 2
+
+    assert result["relationships_discovered"] == 1
+
+    assert (
+        result["relationships"][0]["relationship"]
+        == "RUNS_IMAGE"
+    )
+
+    mock_discovery.return_value.discover.assert_called_once()
