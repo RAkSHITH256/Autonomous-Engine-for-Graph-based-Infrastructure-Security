@@ -2,38 +2,45 @@ import json
 from typing import Any
 
 from backend.graph.neo4j_client import Neo4jClient
+from backend.models.build_provenance import BuildProvenance
 
 
 class GraphBuilder:
     """
-    Builds the AEGIS infrastructure security graph.
+    Builds and manages the AEGIS security graph.
 
-    Graph structure can contain:
+    Supported graph structures:
 
         Asset -[:CONNECTS_TO]-> Asset
         Asset -[:DEPENDS_ON]-> Asset
         Asset -[:HOSTS]-> Asset
         Asset -[:COMMUNICATES_WITH]-> Asset
         Asset -[:RUNS_IMAGE]-> ContainerImage
-        Asset -[:BUILDS]-> ContainerImage
+        Repository -[:BUILDS]-> ContainerImage
 
-    Vulnerabilities are attached to assets using:
+    Vulnerabilities are represented as:
 
         Asset -[:HAS_VULNERABILITY]-> Vulnerability
+
+    CI/CD provenance can establish:
+
+        SourceRepository -[:BUILDS]-> ContainerImage
     """
+
+    # ============================================================
+    # INITIALIZATION
+    # ============================================================
 
     def __init__(self, client: Neo4jClient):
         self.client = client
 
-    # =========================================================
+    # ============================================================
     # CLEAR GRAPH
-    # =========================================================
+    # ============================================================
 
     def clear_graph(self) -> None:
         """
-        Delete all nodes and relationships.
-
-        Intended for development/testing only.
+        Remove all nodes and relationships from the graph.
         """
 
         query = """
@@ -44,9 +51,9 @@ class GraphBuilder:
         with self.client.driver.session() as session:
             session.run(query)
 
-    # =========================================================
-    # CREATE ASSET
-    # =========================================================
+    # ============================================================
+    # ADD ASSET
+    # ============================================================
 
     def add_asset(
         self,
@@ -57,7 +64,19 @@ class GraphBuilder:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """
-        Create or update an infrastructure asset.
+        Add or update an infrastructure asset.
+
+        Assets may represent:
+
+        - containers
+        - container images
+        - repositories
+        - databases
+        - APIs
+        - servers
+        - Kubernetes resources
+        - external systems
+        - Internet
         """
 
         metadata = metadata or {}
@@ -89,9 +108,9 @@ class GraphBuilder:
                 metadata=metadata_json,
             )
 
-    # =========================================================
+    # ============================================================
     # ADD SOURCE REPOSITORY
-    # =========================================================
+    # ============================================================
 
     def add_repository(
         self,
@@ -104,14 +123,11 @@ class GraphBuilder:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """
-        Create or update a source-code repository asset.
+        Add a source repository to the AEGIS graph.
 
-        Repository assets participate in the software supply-chain
-        portion of the AEGIS graph.
+        A repository is represented as an Asset with:
 
-        Example:
-
-            Repository -[:BUILDS]-> ContainerImage
+            type = SOURCE_REPOSITORY
         """
 
         metadata = metadata or {}
@@ -135,9 +151,119 @@ class GraphBuilder:
             metadata=metadata,
         )
 
-    # =========================================================
+    # ============================================================
+    # ADD BUILD PROVENANCE
+    # ============================================================
+
+    def add_build_provenance(
+        self,
+        provenance: BuildProvenance,
+    ) -> None:
+        """
+        Add CI/CD build provenance to the AEGIS graph.
+
+        Valid provenance creates:
+
+            SourceRepository -[:BUILDS]-> ContainerImage
+
+        The relationship is based on validated CI/CD evidence.
+
+        Example:
+
+            GitHub repository
+                    |
+                  BUILDS
+                    |
+                    v
+              Container Image
+        """
+
+        # --------------------------------------------------------
+        # Repository identity
+        # --------------------------------------------------------
+
+        repository_id = (
+            f"github:{provenance.repository}"
+        )
+
+        # --------------------------------------------------------
+        # Image identity
+        #
+        # Remove the sha256: prefix because the graph asset ID
+        # already identifies the type as docker-image.
+        # --------------------------------------------------------
+
+        normalized_image_id = (
+            provenance.image_id.removeprefix(
+                "sha256:"
+            )
+        )
+
+        image_id = (
+            f"docker-image:{normalized_image_id}"
+        )
+
+        # --------------------------------------------------------
+        # Repository asset
+        # --------------------------------------------------------
+
+        repository_metadata = {
+            "workflow": provenance.workflow,
+            "run_id": provenance.run_id,
+            "run_number": provenance.run_number,
+        }
+
+        repository_url = (
+            f"https://github.com/"
+            f"{provenance.repository}"
+        )
+
+        self.add_repository(
+            repository_id=repository_id,
+            name=provenance.repository,
+            url=repository_url,
+            branch=provenance.branch,
+            commit_sha=provenance.commit_sha,
+            provider=provenance.provider,
+            metadata=repository_metadata,
+        )
+
+        # --------------------------------------------------------
+        # Container image asset
+        # --------------------------------------------------------
+
+        image_metadata = {
+            "image": provenance.image,
+            "image_id": provenance.image_id,
+            "commit_sha": provenance.commit_sha,
+            "repository": provenance.repository,
+            "workflow": provenance.workflow,
+            "run_id": provenance.run_id,
+            "run_number": provenance.run_number,
+            "created": provenance.created,
+        }
+
+        self.add_asset(
+            asset_id=image_id,
+            name=provenance.image,
+            asset_type="CONTAINER_IMAGE",
+            criticality="HIGH",
+            metadata=image_metadata,
+        )
+
+        # --------------------------------------------------------
+        # Evidence-backed BUILD relationship
+        # --------------------------------------------------------
+
+        self.connect_assets(
+            source_asset_id=repository_id,
+            target_asset_id=image_id,
+            relationship="BUILDS",
+        )
+
+    # ============================================================
     # CONNECT ASSETS
-    # =========================================================
+    # ============================================================
 
     def connect_assets(
         self,
@@ -150,12 +276,12 @@ class GraphBuilder:
 
         Supported relationships:
 
-            CONNECTS_TO
-            DEPENDS_ON
-            HOSTS
-            COMMUNICATES_WITH
-            RUNS_IMAGE
-            BUILDS
+        - CONNECTS_TO
+        - DEPENDS_ON
+        - HOSTS
+        - COMMUNICATES_WITH
+        - RUNS_IMAGE
+        - BUILDS
         """
 
         allowed_relationships = {
@@ -169,8 +295,7 @@ class GraphBuilder:
 
         if relationship not in allowed_relationships:
             raise ValueError(
-                f"Unsupported relationship type: "
-                f"{relationship}"
+                f"Unsupported relationship type: {relationship}"
             )
 
         query = f"""
@@ -192,9 +317,9 @@ class GraphBuilder:
                 target_asset_id=target_asset_id,
             )
 
-    # =========================================================
+    # ============================================================
     # ADD VULNERABILITY
-    # =========================================================
+    # ============================================================
 
     def add_vulnerability(
         self,
@@ -203,6 +328,10 @@ class GraphBuilder:
     ) -> None:
         """
         Attach a vulnerability to an asset.
+
+        Creates:
+
+            Asset -[:HAS_VULNERABILITY]-> Vulnerability
         """
 
         query = """
@@ -268,9 +397,9 @@ class GraphBuilder:
                 ),
             )
 
-    # =========================================================
-    # BUILD CUSTOM GRAPH
-    # =========================================================
+    # ============================================================
+    # BUILD GRAPH
+    # ============================================================
 
     def build_graph(
         self,
@@ -279,34 +408,13 @@ class GraphBuilder:
         vulnerabilities: list[dict[str, Any]] | None = None,
     ) -> None:
         """
-        Build a graph from supplied assets, relationships,
-        and vulnerabilities.
-
-        Expected asset format:
-
-            {
-                "asset_id": "web-001",
-                "name": "Web Server",
-                "type": "WEB_SERVER",
-                "criticality": "HIGH"
-            }
-
-        Expected relationship format:
-
-            {
-                "source": "web-001",
-                "target": "db-001",
-                "relationship": "DEPENDS_ON"
-            }
-
-        Expected vulnerability format:
-
-            {
-                "asset_id": "app-001",
-                "vulnerability_id": "CVE-001",
-                "severity": "HIGH"
-            }
+        Build a graph from supplied asset, relationship,
+        and vulnerability data.
         """
+
+        # --------------------------------------------------------
+        # Assets
+        # --------------------------------------------------------
 
         for asset in assets:
             self.add_asset(
@@ -329,6 +437,10 @@ class GraphBuilder:
                 ),
             )
 
+        # --------------------------------------------------------
+        # Relationships
+        # --------------------------------------------------------
+
         for relationship in relationships:
             self.connect_assets(
                 source_asset_id=relationship["source"],
@@ -339,46 +451,39 @@ class GraphBuilder:
                 ),
             )
 
+        # --------------------------------------------------------
+        # Vulnerabilities
+        # --------------------------------------------------------
+
         for vulnerability in vulnerabilities or []:
             self.add_vulnerability(
                 asset_id=vulnerability["asset_id"],
                 vulnerability=vulnerability,
             )
 
-    # =========================================================
-    # BUILD DEMO AEGIS GRAPH
-    # =========================================================
+    # ============================================================
+    # DEMO GRAPH
+    # ============================================================
 
     def build_demo_graph(self) -> None:
         """
-        Build a deterministic demonstration graph.
+        Build a small demonstration attack-path graph.
 
-        Useful for:
-
-            - local development
-            - graph visualization
-            - risk-engine testing
-            - attack-path testing
-
-        Graph:
-
-            Internet
-                |
-            CONNECTS_TO
-                |
-            Web Server
-                |
-            CONNECTS_TO
-                |
-            Application Server
-                |
-            CONNECTS_TO
-                |
-            Production DB
-
-        A demonstration vulnerability is attached to
-        the Application Server.
+        Internet
+            |
+            v
+        Web Server
+            |
+            v
+        Application Server
+            |
+            v
+        Production DB
         """
+
+        # --------------------------------------------------------
+        # Internet
+        # --------------------------------------------------------
 
         self.add_asset(
             asset_id="internet-001",
@@ -387,12 +492,20 @@ class GraphBuilder:
             criticality="HIGH",
         )
 
+        # --------------------------------------------------------
+        # Web server
+        # --------------------------------------------------------
+
         self.add_asset(
             asset_id="web-001",
             name="Web Server",
             asset_type="WEB_SERVER",
             criticality="HIGH",
         )
+
+        # --------------------------------------------------------
+        # Application server
+        # --------------------------------------------------------
 
         self.add_asset(
             asset_id="app-001",
@@ -401,6 +514,10 @@ class GraphBuilder:
             criticality="HIGH",
         )
 
+        # --------------------------------------------------------
+        # Production database
+        # --------------------------------------------------------
+
         self.add_asset(
             asset_id="db-001",
             name="Production DB",
@@ -408,11 +525,19 @@ class GraphBuilder:
             criticality="CRITICAL",
         )
 
+        # --------------------------------------------------------
+        # Internet -> Web
+        # --------------------------------------------------------
+
         self.connect_assets(
             source_asset_id="internet-001",
             target_asset_id="web-001",
             relationship="CONNECTS_TO",
         )
+
+        # --------------------------------------------------------
+        # Web -> Application
+        # --------------------------------------------------------
 
         self.connect_assets(
             source_asset_id="web-001",
@@ -420,11 +545,19 @@ class GraphBuilder:
             relationship="CONNECTS_TO",
         )
 
+        # --------------------------------------------------------
+        # Application -> Database
+        # --------------------------------------------------------
+
         self.connect_assets(
             source_asset_id="app-001",
             target_asset_id="db-001",
             relationship="CONNECTS_TO",
         )
+
+        # --------------------------------------------------------
+        # Demo vulnerability
+        # --------------------------------------------------------
 
         self.add_vulnerability(
             asset_id="app-001",

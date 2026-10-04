@@ -1,0 +1,12 @@
+{
+  "provider": "github-actions",
+  "repository": "RAkSHITH256/Autonomous-Engine-for-Graph-based-Infrastructure-Security",
+  "workflow": "AEGIS Security Pipeline",
+  "run_id": "37181848508",
+  "run_number": "11",
+  "commit_sha": "3ceeba027b56e3d79ae5c535bec10458f7c790df",
+  "branch": "main",
+  "image": "aegis:3ceeba027b56e3d79ae5c535bec10458f7c790df",
+  "image_id": "sha256:fc33ee952a7da6db0c0bcddebc8c8b7cc313a0f10d368f261cd5398886808b37",
+  "created": "2026-10-04T06:07:54.348979402Z"
+}

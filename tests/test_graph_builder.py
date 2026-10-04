@@ -4,14 +4,18 @@ import pytest
 
 from backend.graph.graph_builder import GraphBuilder
 from backend.graph.neo4j_client import Neo4jClient
+from backend.models.build_provenance import BuildProvenance
 
+
+# ============================================================
+# TEST HELPERS
+# ============================================================
 
 def make_builder():
     """
     Create a GraphBuilder with a mocked Neo4j driver.
 
-    We use __new__ so the real Neo4j connection is never created
-    during unit tests.
+    No real Neo4j connection is used during unit tests.
     """
     client = Neo4jClient.__new__(Neo4jClient)
     client.driver = MagicMock()
@@ -21,13 +25,13 @@ def make_builder():
 
 def get_session(builder):
     """
-    Return the mocked Neo4j session used by GraphBuilder.
+    Return the mocked Neo4j session.
 
     GraphBuilder uses:
 
         with self.client.driver.session() as session:
 
-    Therefore the actual mock session is the return value
+    Therefore the actual session is the return value
     of __enter__().
     """
     return (
@@ -43,11 +47,11 @@ def get_last_query(session):
     Extract the query string and keyword arguments from
     the most recent session.run(...) call.
 
-    MagicMock.call_args has this structure:
+    MagicMock.call_args has the form:
 
         call((query,), kwargs)
 
-    Therefore the query itself is args[0].
+    Therefore args[0] is the actual query string.
     """
     args, kwargs = session.run.call_args
 
@@ -57,7 +61,7 @@ def get_last_query(session):
 
 
 # ============================================================
-# add_asset
+# ADD ASSET
 # ============================================================
 
 def test_add_asset():
@@ -85,7 +89,7 @@ def test_add_asset():
 
 
 # ============================================================
-# connect_assets
+# CONNECT ASSETS
 # ============================================================
 
 def test_connect_assets():
@@ -109,7 +113,7 @@ def test_connect_assets():
 
 
 # ============================================================
-# Invalid relationship
+# INVALID RELATIONSHIP
 # ============================================================
 
 def test_invalid_relationship():
@@ -124,7 +128,7 @@ def test_invalid_relationship():
 
 
 # ============================================================
-# add_vulnerability
+# ADD VULNERABILITY
 # ============================================================
 
 def test_add_vulnerability():
@@ -157,7 +161,7 @@ def test_add_vulnerability():
 
 
 # ============================================================
-# clear_graph
+# CLEAR GRAPH
 # ============================================================
 
 def test_clear_graph():
@@ -175,20 +179,19 @@ def test_clear_graph():
 
 
 # ============================================================
-# build_demo_graph
+# DEMO GRAPH
 # ============================================================
 
 def test_build_demo_graph():
     builder = make_builder()
 
-    # Mock GraphBuilder methods so we only test the orchestration
+    # Mock internal methods so this test verifies orchestration.
     builder.add_asset = MagicMock()
     builder.connect_assets = MagicMock()
     builder.add_vulnerability = MagicMock()
 
     builder.build_demo_graph()
 
-    # Four demo assets:
     # Internet
     # Web Server
     # Application Server
@@ -200,12 +203,12 @@ def test_build_demo_graph():
     # Application -> DB
     assert builder.connect_assets.call_count == 3
 
-    # One demo vulnerability on the application server
+    # Demo vulnerability
     assert builder.add_vulnerability.call_count == 1
 
 
 # ============================================================
-# build_graph with custom data
+# CUSTOM GRAPH
 # ============================================================
 
 def test_build_custom_graph():
@@ -247,22 +250,22 @@ def test_build_custom_graph():
         ],
     )
 
-    # Two assets should be created
+    # Two assets
     assert builder.add_asset.call_count == 2
 
-    # One relationship should be created
+    # One relationship
     builder.connect_assets.assert_called_once_with(
         source_asset_id="web-001",
         target_asset_id="db-001",
         relationship="DEPENDS_ON",
     )
 
-    # One vulnerability should be created
+    # One vulnerability
     builder.add_vulnerability.assert_called_once()
 
 
 # ============================================================
-# RUNS_IMAGE relationship
+# RUNS_IMAGE RELATIONSHIP
 # ============================================================
 
 def test_connect_assets_allows_runs_image():
@@ -287,7 +290,7 @@ def test_connect_assets_allows_runs_image():
 
 
 # ============================================================
-# BUILDS relationship
+# BUILDS RELATIONSHIP
 # ============================================================
 
 def test_connect_assets_allows_builds():
@@ -312,7 +315,7 @@ def test_connect_assets_allows_builds():
 
 
 # ============================================================
-# SOURCE_REPOSITORY
+# SOURCE REPOSITORY
 # ============================================================
 
 def test_add_repository():
@@ -339,7 +342,6 @@ def test_add_repository():
     assert kwargs["asset_type"] == "SOURCE_REPOSITORY"
     assert kwargs["criticality"] == "HIGH"
 
-    # Metadata is stored as JSON
     assert '"provider": "github"' in kwargs["metadata"]
     assert '"branch": "main"' in kwargs["metadata"]
     assert '"commit_sha": "abc123"' in kwargs["metadata"]
@@ -347,13 +349,13 @@ def test_add_repository():
 
 
 # ============================================================
-# Repository -> Image BUILDS relationship
+# REPOSITORY BUILDS IMAGE
 # ============================================================
 
 def test_repository_builds_image():
     builder = make_builder()
 
-    # 1. Add repository
+    # 1. Repository
     builder.add_repository(
         repository_id="github:rakshith/AEGIS",
         name="AEGIS",
@@ -361,14 +363,14 @@ def test_repository_builds_image():
         commit_sha="abc123",
     )
 
-    # 2. Add container image
+    # 2. Container image
     builder.add_asset(
         asset_id="docker-image:aegis",
         name="aegis:latest",
         asset_type="CONTAINER_IMAGE",
     )
 
-    # 3. Connect repository -> image
+    # 3. Repository -> Image
     builder.connect_assets(
         source_asset_id="github:rakshith/AEGIS",
         target_asset_id="docker-image:aegis",
@@ -377,16 +379,10 @@ def test_repository_builds_image():
 
     session = get_session(builder)
 
-    # Three Neo4j operations:
-    #
-    # 1. Repository
-    # 2. Image
-    # 3. BUILDS relationship
     calls = session.run.call_args_list
 
     assert len(calls) == 3
 
-    # Last call is the BUILDS relationship
     build_args, build_kwargs = calls[-1]
 
     build_query = build_args[0]
@@ -401,4 +397,191 @@ def test_repository_builds_image():
     assert (
         build_kwargs["target_asset_id"]
         == "docker-image:aegis"
+    )
+
+
+# ============================================================
+# BUILD PROVENANCE
+# ============================================================
+
+def test_add_build_provenance():
+    """
+    Verify that validated CI/CD provenance creates:
+
+        Repository -[:BUILDS]-> ContainerImage
+    """
+
+    builder = make_builder()
+
+    provenance = BuildProvenance(
+        provider="github-actions",
+        repository="rakshith/AEGIS",
+        workflow="AEGIS Security Pipeline",
+        run_id="123456789",
+        run_number=42,
+        commit_sha="abc123def456",
+        branch="main",
+        image="aegis:abc123def456",
+        image_id="sha256:1234567890abcdef",
+        created="2026-10-04T06:04:08Z",
+    )
+
+    # Mock the lower-level graph operations.
+    builder.add_repository = MagicMock()
+    builder.add_asset = MagicMock()
+    builder.connect_assets = MagicMock()
+
+    builder.add_build_provenance(
+        provenance
+    )
+
+    # --------------------------------------------------------
+    # Repository
+    # --------------------------------------------------------
+
+    builder.add_repository.assert_called_once()
+
+    repository_kwargs = (
+        builder.add_repository.call_args.kwargs
+    )
+
+    assert (
+        repository_kwargs["repository_id"]
+        == "github:rakshith/AEGIS"
+    )
+
+    assert (
+        repository_kwargs["name"]
+        == "rakshith/AEGIS"
+    )
+
+    assert (
+        repository_kwargs["branch"]
+        == "main"
+    )
+
+    assert (
+        repository_kwargs["commit_sha"]
+        == "abc123def456"
+    )
+
+    assert (
+        repository_kwargs["provider"]
+        == "github-actions"
+    )
+
+    assert (
+        repository_kwargs["url"]
+        == "https://github.com/rakshith/AEGIS"
+    )
+
+    # --------------------------------------------------------
+    # Container image
+    # --------------------------------------------------------
+
+    builder.add_asset.assert_called_once()
+
+    image_kwargs = (
+        builder.add_asset.call_args.kwargs
+    )
+
+    assert (
+        image_kwargs["asset_id"]
+        == "docker-image:1234567890abcdef"
+    )
+
+    assert (
+        image_kwargs["name"]
+        == "aegis:abc123def456"
+    )
+
+    assert (
+        image_kwargs["asset_type"]
+        == "CONTAINER_IMAGE"
+    )
+
+    assert (
+        image_kwargs["criticality"]
+        == "HIGH"
+    )
+
+    # --------------------------------------------------------
+    # BUILDS relationship
+    # --------------------------------------------------------
+
+    builder.connect_assets.assert_called_once_with(
+        source_asset_id="github:rakshith/AEGIS",
+        target_asset_id="docker-image:1234567890abcdef",
+        relationship="BUILDS",
+    )
+
+
+# ============================================================
+# BUILD PROVENANCE METADATA
+# ============================================================
+
+def test_build_provenance_metadata():
+    """
+    Verify that important CI/CD provenance fields are stored
+    as image metadata.
+    """
+
+    builder = make_builder()
+
+    provenance = BuildProvenance(
+        provider="github-actions",
+        repository="rakshith/AEGIS",
+        workflow="AEGIS Security Pipeline",
+        run_id="987654321",
+        run_number=55,
+        commit_sha="deadbeef1234",
+        branch="develop",
+        image="aegis:deadbeef1234",
+        image_id="sha256:abcdef123456",
+        created="2026-10-04T07:00:00Z",
+    )
+
+    builder.add_repository = MagicMock()
+    builder.add_asset = MagicMock()
+    builder.connect_assets = MagicMock()
+
+    builder.add_build_provenance(
+        provenance
+    )
+
+    image_kwargs = (
+        builder.add_asset.call_args.kwargs
+    )
+
+    metadata = image_kwargs["metadata"]
+
+    assert metadata["image"] == "aegis:deadbeef1234"
+
+    assert (
+        metadata["image_id"]
+        == "sha256:abcdef123456"
+    )
+
+    assert (
+        metadata["commit_sha"]
+        == "deadbeef1234"
+    )
+
+    assert (
+        metadata["repository"]
+        == "rakshith/AEGIS"
+    )
+
+    assert (
+        metadata["workflow"]
+        == "AEGIS Security Pipeline"
+    )
+
+    assert metadata["run_id"] == "987654321"
+
+    assert metadata["run_number"] == 55
+
+    assert (
+        metadata["created"]
+        == "2026-10-04T07:00:00Z"
     )
