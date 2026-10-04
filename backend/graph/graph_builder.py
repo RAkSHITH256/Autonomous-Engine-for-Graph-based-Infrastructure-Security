@@ -1,5 +1,6 @@
 import json
 from typing import Any
+
 from backend.graph.neo4j_client import Neo4jClient
 
 
@@ -13,7 +14,8 @@ class GraphBuilder:
         Asset -[:DEPENDS_ON]-> Asset
         Asset -[:HOSTS]-> Asset
         Asset -[:COMMUNICATES_WITH]-> Asset
-        Container -[:RUNS_IMAGE]-> ContainerImage
+        Asset -[:RUNS_IMAGE]-> ContainerImage
+        Asset -[:BUILDS]-> ContainerImage
 
     Vulnerabilities are attached to assets using:
 
@@ -61,9 +63,9 @@ class GraphBuilder:
         metadata = metadata or {}
 
         metadata_json = json.dumps(
-              metadata,
-              default=str,
-)
+            metadata,
+            default=str,
+        )
 
         query = """
         MERGE (asset:Asset {
@@ -88,6 +90,52 @@ class GraphBuilder:
             )
 
     # =========================================================
+    # ADD SOURCE REPOSITORY
+    # =========================================================
+
+    def add_repository(
+        self,
+        repository_id: str,
+        name: str,
+        url: str | None = None,
+        branch: str = "main",
+        commit_sha: str | None = None,
+        provider: str = "github",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Create or update a source-code repository asset.
+
+        Repository assets participate in the software supply-chain
+        portion of the AEGIS graph.
+
+        Example:
+
+            Repository -[:BUILDS]-> ContainerImage
+        """
+
+        metadata = metadata or {}
+
+        metadata.update(
+            {
+                "provider": provider,
+                "branch": branch,
+                "commit_sha": commit_sha,
+            }
+        )
+
+        if url is not None:
+            metadata["url"] = url
+
+        self.add_asset(
+            asset_id=repository_id,
+            name=name,
+            asset_type="SOURCE_REPOSITORY",
+            criticality="HIGH",
+            metadata=metadata,
+        )
+
+    # =========================================================
     # CONNECT ASSETS
     # =========================================================
 
@@ -107,6 +155,7 @@ class GraphBuilder:
             HOSTS
             COMMUNICATES_WITH
             RUNS_IMAGE
+            BUILDS
         """
 
         allowed_relationships = {
@@ -115,6 +164,7 @@ class GraphBuilder:
             "HOSTS",
             "COMMUNICATES_WITH",
             "RUNS_IMAGE",
+            "BUILDS",
         }
 
         if relationship not in allowed_relationships:
@@ -219,6 +269,83 @@ class GraphBuilder:
             )
 
     # =========================================================
+    # BUILD CUSTOM GRAPH
+    # =========================================================
+
+    def build_graph(
+        self,
+        assets: list[dict[str, Any]],
+        relationships: list[dict[str, Any]],
+        vulnerabilities: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """
+        Build a graph from supplied assets, relationships,
+        and vulnerabilities.
+
+        Expected asset format:
+
+            {
+                "asset_id": "web-001",
+                "name": "Web Server",
+                "type": "WEB_SERVER",
+                "criticality": "HIGH"
+            }
+
+        Expected relationship format:
+
+            {
+                "source": "web-001",
+                "target": "db-001",
+                "relationship": "DEPENDS_ON"
+            }
+
+        Expected vulnerability format:
+
+            {
+                "asset_id": "app-001",
+                "vulnerability_id": "CVE-001",
+                "severity": "HIGH"
+            }
+        """
+
+        for asset in assets:
+            self.add_asset(
+                asset_id=asset["asset_id"],
+                name=asset["name"],
+                asset_type=asset.get(
+                    "type",
+                    asset.get(
+                        "asset_type",
+                        "UNKNOWN",
+                    ),
+                ),
+                criticality=asset.get(
+                    "criticality",
+                    "UNKNOWN",
+                ),
+                metadata=asset.get(
+                    "metadata",
+                    {},
+                ),
+            )
+
+        for relationship in relationships:
+            self.connect_assets(
+                source_asset_id=relationship["source"],
+                target_asset_id=relationship["target"],
+                relationship=relationship.get(
+                    "relationship",
+                    "CONNECTS_TO",
+                ),
+            )
+
+        for vulnerability in vulnerabilities or []:
+            self.add_vulnerability(
+                asset_id=vulnerability["asset_id"],
+                vulnerability=vulnerability,
+            )
+
+    # =========================================================
     # BUILD DEMO AEGIS GRAPH
     # =========================================================
 
@@ -228,20 +355,35 @@ class GraphBuilder:
 
         Useful for:
 
-            - development
-            - demonstrations
-            - integration testing
-            - Neo4j visualization
-        """
+            - local development
+            - graph visualization
+            - risk-engine testing
+            - attack-path testing
 
-        # -----------------------------------------------------
-        # Assets
-        # -----------------------------------------------------
+        Graph:
+
+            Internet
+                |
+            CONNECTS_TO
+                |
+            Web Server
+                |
+            CONNECTS_TO
+                |
+            Application Server
+                |
+            CONNECTS_TO
+                |
+            Production DB
+
+        A demonstration vulnerability is attached to
+        the Application Server.
+        """
 
         self.add_asset(
             asset_id="internet-001",
             name="Internet",
-            asset_type="EXTERNAL",
+            asset_type="INTERNET",
             criticality="HIGH",
         )
 
@@ -255,7 +397,7 @@ class GraphBuilder:
         self.add_asset(
             asset_id="app-001",
             name="Application Server",
-            asset_type="APPLICATION",
+            asset_type="APPLICATION_SERVER",
             criticality="HIGH",
         )
 
@@ -266,28 +408,23 @@ class GraphBuilder:
             criticality="CRITICAL",
         )
 
-        # -----------------------------------------------------
-        # Network relationships
-        # -----------------------------------------------------
-
         self.connect_assets(
             source_asset_id="internet-001",
             target_asset_id="web-001",
+            relationship="CONNECTS_TO",
         )
 
         self.connect_assets(
             source_asset_id="web-001",
             target_asset_id="app-001",
+            relationship="CONNECTS_TO",
         )
 
         self.connect_assets(
             source_asset_id="app-001",
             target_asset_id="db-001",
+            relationship="CONNECTS_TO",
         )
-
-        # -----------------------------------------------------
-        # Vulnerability on application server
-        # -----------------------------------------------------
 
         self.add_vulnerability(
             asset_id="app-001",
@@ -302,104 +439,3 @@ class GraphBuilder:
                 "fixed_version": "1.0.1",
             },
         )
-
-    # =========================================================
-    # BUILD CUSTOM GRAPH
-    # =========================================================
-
-    def build_graph(
-        self,
-        assets: list[dict[str, Any]],
-        relationships: list[dict[str, str]],
-        vulnerabilities: list[dict[str, Any]],
-    ) -> None:
-        """
-        Build an arbitrary AEGIS graph.
-
-        assets:
-
-            [
-                {
-                    "asset_id": "web-001",
-                    "name": "Web Server",
-                    "type": "WEB_SERVER",
-                    "criticality": "HIGH"
-                }
-            ]
-
-        relationships:
-
-            [
-                {
-                    "source": "internet-001",
-                    "target": "web-001",
-                    "type": "CONNECTS_TO"
-                },
-                {
-                    "source": "container-001",
-                    "target": "image-001",
-                    "type": "RUNS_IMAGE"
-                }
-            ]
-
-        vulnerabilities:
-
-            [
-                {
-                    "asset_id": "web-001",
-                    "vulnerability": {...}
-                }
-            ]
-        """
-
-        # -----------------------------------------------------
-        # Assets
-        # -----------------------------------------------------
-
-        for asset in assets:
-
-            self.add_asset(
-                asset_id=asset["asset_id"],
-                name=asset["name"],
-                asset_type=asset["type"],
-                criticality=asset.get(
-                    "criticality",
-                    "UNKNOWN",
-                ),
-                metadata=asset.get(
-                    "metadata",
-                    {},
-                ),
-            )
-
-        # -----------------------------------------------------
-        # Relationships
-        # -----------------------------------------------------
-
-        for relationship in relationships:
-
-            self.connect_assets(
-                source_asset_id=relationship[
-                    "source"
-                ],
-                target_asset_id=relationship[
-                    "target"
-                ],
-                relationship=relationship.get(
-                    "type",
-                    "CONNECTS_TO",
-                ),
-            )
-
-        # -----------------------------------------------------
-        # Vulnerabilities
-        # -----------------------------------------------------
-
-        for item in vulnerabilities:
-
-            self.add_vulnerability(
-                asset_id=item["asset_id"],
-                vulnerability=item[
-                    "vulnerability"
-                ],
-            )

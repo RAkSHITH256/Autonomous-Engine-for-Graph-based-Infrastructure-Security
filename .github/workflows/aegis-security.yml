@@ -5,21 +5,31 @@ on:
     branches:
       - main
       - develop
+
   pull_request:
     branches:
       - main
+
   workflow_dispatch:
+
 
 permissions:
   contents: read
   security-events: write
 
+
+# ============================================================
+# TEST
+# ============================================================
+
 jobs:
+
   test:
     name: Run AEGIS Tests
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -32,12 +42,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirement.txt
-          pip install pytest neo4j
+          pip install pytest
 
       - name: Run tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest -q
+        run: |
+          pytest -q
+
+
+  # ============================================================
+  # TRIVY
+  # ============================================================
 
   trivy:
     name: Trivy Filesystem Scan
@@ -45,11 +61,13 @@ jobs:
     needs: test
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Create reports directory
-        run: mkdir -p security/reports
+        run: |
+          mkdir -p security/reports
 
       - name: Run Trivy JSON scan
         uses: aquasecurity/trivy-action@master
@@ -69,12 +87,18 @@ jobs:
           path: security/reports/trivy.json
           retention-days: 30
 
+
+  # ============================================================
+  # SEMGREP
+  # ============================================================
+
   semgrep:
     name: Semgrep Source Scan
     runs-on: ubuntu-latest
     needs: test
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -84,10 +108,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install Semgrep
-        run: pip install semgrep
+        run: |
+          pip install semgrep
 
       - name: Create reports directory
-        run: mkdir -p security/reports
+        run: |
+          mkdir -p security/reports
 
       - name: Run Semgrep JSON scan
         run: |
@@ -104,17 +130,24 @@ jobs:
           path: security/reports/semgrep.json
           retention-days: 30
 
+
+  # ============================================================
+  # SBOM
+  # ============================================================
+
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
     needs: test
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Create reports directory
-        run: mkdir -p security/reports
+        run: |
+          mkdir -p security/reports
 
       - name: Generate CycloneDX SBOM
         uses: anchore/sbom-action@v0
@@ -134,9 +167,16 @@ jobs:
           name: aegis-sbom
           path: security/reports/sbom.json
           retention-days: 30
-  aegis-analysis:
-    name: AEGIS Analysis and Report
+
+
+  # ============================================================
+  # CONTAINER BUILD + PROVENANCE
+  # ============================================================
+
+  container-build:
+    name: Build AEGIS Container
     runs-on: ubuntu-latest
+
     needs:
       - test
       - trivy
@@ -144,8 +184,114 @@ jobs:
       - sbom
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Docker Buildx
+      # --------------------------------------------------------
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # --------------------------------------------------------
+      # Build image
+      # --------------------------------------------------------
+
+      - name: Build AEGIS container
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag aegis:${{ github.sha }} \
+            --tag aegis:latest \
+            .
+
+      # --------------------------------------------------------
+      # Inspect image
+      # --------------------------------------------------------
+
+      - name: Inspect AEGIS image
+        run: |
+          docker image inspect aegis:${{ github.sha }}
+
+      # --------------------------------------------------------
+      # Extract image metadata
+      # --------------------------------------------------------
+
+      - name: Generate image metadata
+        run: |
+          mkdir -p security/reports
+
+          IMAGE_ID=$(docker image inspect \
+            aegis:${{ github.sha }} \
+            --format '{{.Id}}')
+
+          CREATED=$(docker image inspect \
+            aegis:${{ github.sha }} \
+            --format '{{.Created}}')
+
+          echo "IMAGE_ID=$IMAGE_ID"
+          echo "CREATED=$CREATED"
+
+          cat > security/reports/build-provenance.json <<EOF
+          {
+            "provider": "github-actions",
+            "repository": "${{ github.repository }}",
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}",
+            "run_number": "${{ github.run_number }}",
+            "commit_sha": "${{ github.sha }}",
+            "branch": "${{ github.ref_name }}",
+            "image": "aegis:${{ github.sha }}",
+            "image_id": "$IMAGE_ID",
+            "created": "$CREATED"
+          }
+          EOF
+
+      # --------------------------------------------------------
+      # Display provenance
+      # --------------------------------------------------------
+
+      - name: Display build provenance
+        run: |
+          cat security/reports/build-provenance.json
+
+      # --------------------------------------------------------
+      # Upload provenance
+      # --------------------------------------------------------
+
+      - name: Upload build provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-build-provenance
+          path: security/reports/build-provenance.json
+          retention-days: 30
+
+
+  # ============================================================
+  # AEGIS ANALYSIS
+  # ============================================================
+
+  aegis-analysis:
+    name: AEGIS Analysis and Report
+    runs-on: ubuntu-latest
+
+    needs:
+      - test
+      - trivy
+      - semgrep
+      - sbom
+      - container-build
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------------
+      # Download Trivy
+      # --------------------------------------------------------
 
       - name: Download Trivy report
         uses: actions/download-artifact@v4
@@ -153,11 +299,19 @@ jobs:
           name: aegis-trivy
           path: security/reports
 
+      # --------------------------------------------------------
+      # Download Semgrep
+      # --------------------------------------------------------
+
       - name: Download Semgrep report
         uses: actions/download-artifact@v4
         with:
           name: aegis-semgrep
           path: security/reports
+
+      # --------------------------------------------------------
+      # Download SBOM
+      # --------------------------------------------------------
 
       - name: Download SBOM
         uses: actions/download-artifact@v4
@@ -165,16 +319,38 @@ jobs:
           name: aegis-sbom
           path: security/reports
 
+      # --------------------------------------------------------
+      # Download build provenance
+      # --------------------------------------------------------
+
+      - name: Download build provenance
+        uses: actions/download-artifact@v4
+        with:
+          name: aegis-build-provenance
+          path: security/reports
+
+      # --------------------------------------------------------
+      # Setup Python
+      # --------------------------------------------------------
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      # --------------------------------------------------------
+      # Install dependencies
+      # --------------------------------------------------------
+
       - name: Install AEGIS dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirement.txt
-          pip install pytest neo4j
+          pip install pytest
+
+      # --------------------------------------------------------
+      # Run AEGIS report engine
+      # --------------------------------------------------------
 
       - name: Run AEGIS report engine
         env:
@@ -182,6 +358,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
+
         run: |
           python scripts/aegis_ci_report.py \
             --trivy security/reports/trivy.json \
@@ -189,12 +366,20 @@ jobs:
             --sbom security/reports/sbom.json \
             --output security/reports
 
+      # --------------------------------------------------------
+      # Publish GitHub summary
+      # --------------------------------------------------------
+
       - name: Publish AEGIS summary
         if: always()
         run: |
           if [ -f security/reports/aegis-report.md ]; then
             cat security/reports/aegis-report.md >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      # --------------------------------------------------------
+      # Upload complete report
+      # --------------------------------------------------------
 
       - name: Upload complete AEGIS report
         if: always()
@@ -204,13 +389,20 @@ jobs:
           path: security/reports/
           retention-days: 30
 
+
+  # ============================================================
+  # SECURITY GATE
+  # ============================================================
+
   security-gate:
     name: AEGIS Security Gate
     runs-on: ubuntu-latest
+
     needs:
       - aegis-analysis
 
     steps:
+
       - name: Verify AEGIS report
         run: |
           echo "AEGIS analysis completed."
