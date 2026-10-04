@@ -16,13 +16,18 @@ on:
 permissions:
   contents: read
   security-events: write
+  packages: write
 
 
 # ============================================================
-# TEST
+# JOBS
 # ============================================================
 
 jobs:
+
+  # ============================================================
+  # TEST
+  # ============================================================
 
   test:
     name: Run AEGIS Tests
@@ -170,11 +175,11 @@ jobs:
 
 
   # ============================================================
-  # CONTAINER BUILD + PROVENANCE
+  # CONTAINER BUILD + GHCR + PROVENANCE
   # ============================================================
 
   container-build:
-    name: Build AEGIS Container
+    name: Build and Publish AEGIS Container
     runs-on: ubuntu-latest
 
     needs:
@@ -195,44 +200,173 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+
+      # --------------------------------------------------------
+      # Determine GHCR image name
+      # --------------------------------------------------------
+
+      - name: Set GHCR image name
+        id: image
+        run: |
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/aegis"
+
+          echo "name=$IMAGE" >> "$GITHUB_OUTPUT"
+
+          echo "========================================"
+          echo "GHCR IMAGE"
+          echo "========================================"
+          echo "$IMAGE"
+
+
+      # --------------------------------------------------------
+      # Login to GitHub Container Registry
+      #
+      # Do NOT login for pull requests.
+      # This prevents fork PRs from attempting to push.
+      # --------------------------------------------------------
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+
       # --------------------------------------------------------
       # Build image
       # --------------------------------------------------------
 
       - name: Build AEGIS container
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+
         run: |
           docker build \
             --file backend/Dockerfile \
-            --tag aegis:${{ github.sha }} \
-            --tag aegis:latest \
+            --tag "$IMAGE:${{ github.sha }}" \
+            --tag "$IMAGE:latest" \
             .
+
 
       # --------------------------------------------------------
       # Inspect image
       # --------------------------------------------------------
 
       - name: Inspect AEGIS image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+
         run: |
-          docker image inspect aegis:${{ github.sha }}
+          docker image inspect "$IMAGE:${{ github.sha }}"
+
 
       # --------------------------------------------------------
-      # Extract image metadata
+      # Push immutable SHA tag + latest tag
       # --------------------------------------------------------
 
-      - name: Generate image metadata
+      - name: Push AEGIS image to GHCR
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+
+        run: |
+          echo "Pushing immutable image tag..."
+          docker push "$IMAGE:${{ github.sha }}"
+
+          echo "Pushing latest tag..."
+          docker push "$IMAGE:latest"
+
+
+      # --------------------------------------------------------
+      # Resolve immutable registry digest
+      # --------------------------------------------------------
+
+      - name: Resolve registry digest
+        if: github.event_name != 'pull_request'
+        id: digest
+
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+
+        run: |
+          DIGEST=$(docker buildx imagetools inspect \
+            "$IMAGE:${{ github.sha }}" \
+            --format '{{.Manifest.Digest}}')
+
+          if [ -z "$DIGEST" ]; then
+            echo "ERROR: Registry digest could not be resolved."
+            exit 1
+          fi
+
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+          echo "========================================"
+          echo "IMMUTABLE REGISTRY DIGEST"
+          echo "========================================"
+          echo "$DIGEST"
+
+
+      # --------------------------------------------------------
+      # Generate build provenance
+      # --------------------------------------------------------
+
+      - name: Generate build provenance
+
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+
         run: |
           mkdir -p security/reports
 
-          IMAGE_ID=$(docker image inspect \
-            aegis:${{ github.sha }} \
-            --format '{{.Id}}')
-
           CREATED=$(docker image inspect \
-            aegis:${{ github.sha }} \
+            "$IMAGE:${{ github.sha }}" \
             --format '{{.Created}}')
 
-          echo "IMAGE_ID=$IMAGE_ID"
-          echo "CREATED=$CREATED"
+          # ----------------------------------------------------
+          # For normal pushes:
+          #
+          #   image = GHCR immutable digest
+          #   image_id = registry digest
+          #
+          # For pull requests:
+          #
+          #   image = temporary SHA tag
+          #   image_id = local Docker image ID
+          # ----------------------------------------------------
+
+          if [ -n "$DIGEST" ]; then
+
+            IMAGE_REFERENCE="${IMAGE}@${DIGEST}"
+            IMAGE_ID="${DIGEST}"
+
+          else
+
+            IMAGE_REFERENCE="${IMAGE}:${GITHUB_SHA}"
+
+            IMAGE_ID=$(docker image inspect \
+              "$IMAGE:${{ github.sha }}" \
+              --format '{{.Id}}')
+
+          fi
+
+          echo "========================================"
+          echo "BUILD PROVENANCE"
+          echo "========================================"
+
+          echo "Image:"
+          echo "$IMAGE_REFERENCE"
+
+          echo ""
+          echo "Image ID:"
+          echo "$IMAGE_ID"
+
+          echo ""
+          echo "Created:"
+          echo "$CREATED"
+
 
           cat > security/reports/build-provenance.json <<EOF
           {
@@ -240,14 +374,28 @@ jobs:
             "repository": "${{ github.repository }}",
             "workflow": "${{ github.workflow }}",
             "run_id": "${{ github.run_id }}",
-            "run_number": "${{ github.run_number }}",
+            "run_number": ${{ github.run_number }},
             "commit_sha": "${{ github.sha }}",
             "branch": "${{ github.ref_name }}",
-            "image": "aegis:${{ github.sha }}",
-            "image_id": "$IMAGE_ID",
-            "created": "$CREATED"
+            "image": "${IMAGE_REFERENCE}",
+            "image_id": "${IMAGE_ID}",
+            "created": "${CREATED}"
           }
           EOF
+
+
+      # --------------------------------------------------------
+      # Validate provenance JSON
+      # --------------------------------------------------------
+
+      - name: Validate build provenance
+        run: |
+          python -m json.tool \
+            security/reports/build-provenance.json \
+            > /dev/null
+
+          echo "Build provenance JSON is valid."
+
 
       # --------------------------------------------------------
       # Display provenance
@@ -255,7 +403,12 @@ jobs:
 
       - name: Display build provenance
         run: |
+          echo "========================================"
+          echo "AEGIS BUILD PROVENANCE"
+          echo "========================================"
+
           cat security/reports/build-provenance.json
+
 
       # --------------------------------------------------------
       # Upload provenance
@@ -289,6 +442,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
       # --------------------------------------------------------
       # Download Trivy
       # --------------------------------------------------------
@@ -298,6 +452,7 @@ jobs:
         with:
           name: aegis-trivy
           path: security/reports
+
 
       # --------------------------------------------------------
       # Download Semgrep
@@ -309,6 +464,7 @@ jobs:
           name: aegis-semgrep
           path: security/reports
 
+
       # --------------------------------------------------------
       # Download SBOM
       # --------------------------------------------------------
@@ -318,6 +474,7 @@ jobs:
         with:
           name: aegis-sbom
           path: security/reports
+
 
       # --------------------------------------------------------
       # Download build provenance
@@ -329,6 +486,7 @@ jobs:
           name: aegis-build-provenance
           path: security/reports
 
+
       # --------------------------------------------------------
       # Setup Python
       # --------------------------------------------------------
@@ -337,6 +495,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
 
       # --------------------------------------------------------
       # Install dependencies
@@ -347,6 +506,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirement.txt
           pip install pytest
+
 
       # --------------------------------------------------------
       # Run AEGIS report engine
@@ -366,16 +526,19 @@ jobs:
             --sbom security/reports/sbom.json \
             --output security/reports
 
+
       # --------------------------------------------------------
       # Publish GitHub summary
       # --------------------------------------------------------
 
       - name: Publish AEGIS summary
         if: always()
+
         run: |
           if [ -f security/reports/aegis-report.md ]; then
             cat security/reports/aegis-report.md >> "$GITHUB_STEP_SUMMARY"
           fi
+
 
       # --------------------------------------------------------
       # Upload complete report
@@ -383,7 +546,9 @@ jobs:
 
       - name: Upload complete AEGIS report
         if: always()
+
         uses: actions/upload-artifact@v4
+
         with:
           name: aegis-security-report
           path: security/reports/
@@ -406,4 +571,3 @@ jobs:
       - name: Verify AEGIS report
         run: |
           echo "AEGIS analysis completed."
-          echo "The detailed JSON/Markdown report is available as a workflow artifact."
