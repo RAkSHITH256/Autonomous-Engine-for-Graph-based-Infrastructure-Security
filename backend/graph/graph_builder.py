@@ -442,15 +442,17 @@ class GraphBuilder:
         # --------------------------------------------------------
 
         for relationship in relationships:
-            self.connect_assets(
-                source_asset_id=relationship["source"],
-                target_asset_id=relationship["target"],
-                relationship=relationship.get(
-                    "relationship",
-                    "CONNECTS_TO",
-                ),
-            )
-
+          self.connect_assets(
+                 source_asset_id=relationship["source"],
+                 target_asset_id=relationship["target"],
+                 relationship=relationship.get(
+            "type",
+            relationship.get(
+                "relationship",
+                "CONNECTS_TO",
+            ),
+        ),
+    )
         # --------------------------------------------------------
         # Vulnerabilities
         # --------------------------------------------------------

@@ -585,3 +585,40 @@ def test_build_provenance_metadata():
         metadata["created"]
         == "2026-10-04T07:00:00Z"
     )
+
+def test_build_graph_uses_type_for_relationship():
+    client = MagicMock()
+    builder = GraphBuilder(client)
+
+    builder.add_asset = MagicMock()
+    builder.connect_assets = MagicMock()
+    builder.add_vulnerability = MagicMock()
+
+    builder.build_graph(
+        assets=[
+            {
+                "asset_id": "container-001",
+                "name": "aegis-runtime",
+                "type": "CONTAINER",
+            },
+            {
+                "asset_id": "image-001",
+                "name": "aegis-image",
+                "type": "CONTAINER_IMAGE",
+            },
+        ],
+        relationships=[
+            {
+                "source": "container-001",
+                "target": "image-001",
+                "type": "RUNS_IMAGE",
+            }
+        ],
+        vulnerabilities=[],
+    )
+
+    builder.connect_assets.assert_called_once_with(
+        source_asset_id="container-001",
+        target_asset_id="image-001",
+        relationship="RUNS_IMAGE",
+    )
